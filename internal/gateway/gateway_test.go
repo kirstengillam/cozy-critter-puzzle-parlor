@@ -2,55 +2,135 @@ package gateway
 
 import (
 	"context"
-	"net"
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+
+	"cozy-critter-puzzle-parlor/internal/schema"
 )
 
-func TestEchoRoundTrip(t *testing.T) {
-	const broker = "localhost:9092"
-
-	conn, err := net.DialTimeout("tcp", broker, 2*time.Second)
-	if err != nil {
-		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
-	}
-	conn.Close()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	gw := New([]string{broker}, "echo-test", nil)
-	if err := gw.EnsureTopic(ctx); err != nil {
-		t.Fatalf("ensure topic: %v", err)
-	}
-
-	srv := httptest.NewServer(gw.Handler())
-	defer srv.Close()
-
+func dial(t *testing.T, srv *httptest.Server) (*websocket.Conn, context.Context, context.CancelFunc) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
-
-	client, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
+		cancel()
 		t.Fatalf("dial: %v", err)
 	}
-	defer client.CloseNow()
+	return conn, ctx, cancel
+}
 
-	want := "hello through kafka"
-	if err := client.Write(ctx, websocket.MessageText, []byte(want)); err != nil {
+func sendEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn, msgType string, payload any) {
+	t.Helper()
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	env := schema.Envelope{Type: msgType, Payload: raw}
+	data, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
 		t.Fatalf("write: %v", err)
 	}
+}
 
-	_, got, err := client.Read(ctx)
+func readEnvelope(t *testing.T, ctx context.Context, conn *websocket.Conn) schema.Envelope {
+	t.Helper()
+	_, data, err := conn.Read(ctx)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if string(got) != want {
-		t.Fatalf("got %q, want %q", got, want)
+	var env schema.Envelope
+	if err := json.Unmarshal(data, &env); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	return env
+}
+
+func TestCreateAndJoinRoom(t *testing.T) {
+	gw := New(nil, nil)
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	creator, ctx, cancel := dial(t, srv)
+	defer cancel()
+	defer creator.CloseNow()
+
+	sendEnvelope(t, ctx, creator, schema.TypeCreateRoom, struct{}{})
+	env := readEnvelope(t, ctx, creator)
+	if env.Type != schema.TypeRoomCreated {
+		t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypeRoomCreated)
+	}
+	var created schema.RoomCreated
+	if err := json.Unmarshal(env.Payload, &created); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+	if created.RoomCode == "" {
+		t.Fatal("RoomCreated.RoomCode is empty")
 	}
 
-	client.Close(websocket.StatusNormalClosure, "")
+	joiner, jctx, jcancel := dial(t, srv)
+	defer jcancel()
+	defer joiner.CloseNow()
+
+	sendEnvelope(t, jctx, joiner, schema.TypeJoinRoom, schema.JoinRoomRequest{
+		PlayerID: "player_capy_1",
+		RoomCode: created.RoomCode,
+	})
+	joinEnv := readEnvelope(t, jctx, joiner)
+	if joinEnv.Type != schema.TypeJoined {
+		t.Fatalf("got envelope type %q, want %q", joinEnv.Type, schema.TypeJoined)
+	}
+	var joined schema.Joined
+	if err := json.Unmarshal(joinEnv.Payload, &joined); err != nil {
+		t.Fatalf("unmarshal Joined: %v", err)
+	}
+	if joined.RoomCode != created.RoomCode {
+		t.Fatalf("joined room code %q, want %q", joined.RoomCode, created.RoomCode)
+	}
+	if joined.PlayerID != "player_capy_1" {
+		t.Fatalf("joined player_id %q, want %q", joined.PlayerID, "player_capy_1")
+	}
+}
+
+func TestJoinUnknownRoomCode(t *testing.T) {
+	gw := New(nil, nil)
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	conn, ctx, cancel := dial(t, srv)
+	defer cancel()
+	defer conn.CloseNow()
+
+	sendEnvelope(t, ctx, conn, schema.TypeJoinRoom, schema.JoinRoomRequest{
+		PlayerID: "player_frog_1",
+		RoomCode: "NOPE00",
+	})
+	env := readEnvelope(t, ctx, conn)
+	if env.Type != schema.TypeError {
+		t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypeError)
+	}
+}
+
+func TestUnknownMessageType(t *testing.T) {
+	gw := New(nil, nil)
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	conn, ctx, cancel := dial(t, srv)
+	defer cancel()
+	defer conn.CloseNow()
+
+	sendEnvelope(t, ctx, conn, "NOT_A_REAL_TYPE", struct{}{})
+	env := readEnvelope(t, ctx, conn)
+	if env.Type != schema.TypeError {
+		t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypeError)
+	}
 }
