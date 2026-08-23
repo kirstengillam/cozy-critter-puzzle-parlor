@@ -8,7 +8,7 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
   stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
-- **Milestone 2 (Room Sync):** starting now.
+- **Milestone 2 (Room Sync):** 2.1–2.2 done (private code-joined rooms). Movement (2.3+) is next.
 - **Milestones 3–4:** not started.
 
 ## Locked-in decisions
@@ -87,11 +87,13 @@ Goal: two browser tabs, each holding a join code for the same room, see each oth
 can chat, with messages passing through a (stub) filter.
 
 **Rooms & joining**
-2.1 Room lifecycle: a `CREATE_ROOM` message generates a short room code (e.g. 6 alphanumeric chars) and
+2.1 ✅ Room lifecycle: a `CREATE_ROOM` message generates a short room code (e.g. 6 alphanumeric chars) and
     registers an empty room in the gateway's in-memory registry. In-memory is fine for now — rooms are
-    ephemeral; persistence is a later concern.
-2.2 `JOIN_ROOM` message: client sends `{player_id, room_code}`; gateway validates the code exists,
-    registers the connection under that room, rejects unknown codes.
+    ephemeral; persistence is a later concern. (`internal/room`, `internal/schema` — commit 21a5389.)
+2.2 ✅ `JOIN_ROOM` message: client sends `{player_id, room_code}`; gateway validates the code exists,
+    registers the connection under that room, rejects unknown codes. (Connection-to-room association is
+    currently just a local variable in the handler; a real membership structure arrives with 2.5/2.6
+    broadcast.)
 
 **Movement**
 2.3 Define the `player-positions` payload as Go structs matching the PRD schema; put them in a shared
