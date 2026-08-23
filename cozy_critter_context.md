@@ -8,10 +8,14 @@
 The Cozy Critter Puzzle Parlor is a remote, self-contained, event-driven multiplayer social MMO and casual brain-training platform. Inspired by the community mechanics of Club Penguin and the accessibility of modern web games, this platform allows players to select cute animal avatars (capybaras, frogs, ducks, platypuses), customize their outfits, chat in real-time within persistent virtual environments ("rooms"), and play casual games (Sudoku, word games, turn-based multiplayer board games).
 
 ### Core Goals
-* **Zero-Outreach Customer Acquisition:** Optimize for headless/browser-based distribution on web portals (itch.io, CrazyGames) and cozy gaming communities to organically acquire players.
 * **Invisible Frontend / Heavy Backend:** Mitigate minimalist or "crude" frontend engineering constraints by building a high-performance, robust, and cheat-proof backend engine.
 * **Scalable Event-Driven Core:** Leverage Apache Kafka to handle real-time message streaming, room state synchronization, cheat-proof economy transactions, and multiplayer matchmaking.
 * **Self-Sustaining Economy:** Provide an automated transactional loop where players earn currency natively via validated mini-games and spend it on cosmetic asset customizations.
+
+**Distribution note:** Public, zero-outreach distribution (itch.io, CrazyGames, cozy gaming communities)
+is a possible path, not a committed core goal — this may instead end up self-hosted (e.g. for a private
+group of known players) rather than publicly distributed. Architecture and moderation decisions should
+not assume public discovery is guaranteed.
 
 ---
 
