@@ -3,6 +3,14 @@
 This supplements [cozy_critter_context.md](cozy_critter_context.md) (the PRD) with the finer-grained,
 decided steps we're actually building against. Update this file as decisions change.
 
+## Status
+
+- **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
+  stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
+  end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
+- **Milestone 2 (Room Sync):** starting now.
+- **Milestones 3–4:** not started.
+
 ## Locked-in decisions
 
 - **Solo project, portfolio-oriented.** Kafka + Kubernetes are used deliberately to demonstrate
@@ -57,18 +65,21 @@ decided steps we're actually building against. Update this file as decisions cha
 
 Goal: a single Docker Compose stack where a browser tab round-trips a message through Kafka and back.
 
-1.1 Scaffold the repo: `cmd/gateway` (Go entrypoint), `internal/` (packages), `frontend/` (static
+1.1 ✅ Scaffold the repo: `cmd/gateway` (Go entrypoint), `internal/` (packages), `frontend/` (static
     Phaser.js client), `deploy/compose/`, `deploy/k8s/` (empty for now), `go.mod`.
-1.2 `docker-compose.yml`: single KRaft-mode Kafka broker (no Zookeeper) with a healthcheck.
-1.3 Minimal Go WebSocket gateway: accept a connection, on any inbound message produce it to an
+1.2 ✅ `docker-compose.yml`: single KRaft-mode Kafka broker (no Zookeeper) with a healthcheck.
+1.3 ✅ Minimal Go WebSocket gateway: accept a connection, on any inbound message produce it to an
     `echo-test` topic, consume that same topic, push whatever comes back out over the socket.
-1.4 Minimal static `index.html` + Phaser.js stub: connect to the gateway over WebSocket, send a test
-    message on a button click, render whatever comes back.
-1.5 Manual verification: open one tab, send a message, confirm it round-trips through Kafka and back
-    to the same tab within reasonable latency.
-1.6 One-command bootstrap (`Makefile` or script): `make up` builds and starts the whole Compose stack.
-1.7 (stretch) GitHub Actions CI: `go vet` + `go test` on push — cheap resume value, skip if it slows
-    you down at this stage.
+    (`internal/gateway`; had to fix a consumer-offset race — see commit 1e8904e.)
+1.4 ✅ Minimal static `index.html` + Phaser.js stub: connect to the gateway over WebSocket, send a test
+    message on a button click, render whatever comes back. (Phaser vendored locally, not CDN; needed an
+    origin allowlist since frontend/gateway run on different dev ports — see commit 94125de.)
+1.5 ✅ Manual verification: open one tab, send a message, confirm it round-trips through Kafka and back
+    to the same tab within reasonable latency. (Verified in a real browser pane, not just the automated
+    test — folded into the 1.4 session rather than a separate pass.)
+1.6 ⏭️ skipped for now — One-command bootstrap (`Makefile` or script): `make up` builds and starts the
+    whole Compose stack.
+1.7 ⏭️ skipped for now (stretch) — GitHub Actions CI: `go vet` + `go test` on push.
 
 ## Milestone 2: Room Sync — Presence, Movement, and Private-Room Chat
 
