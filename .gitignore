@@ -1,0 +1,15 @@
+.idea/
+.DS_Store
+
+# Go
+/bin/
+*.exe
+*.test
+
+# Node/frontend
+node_modules/
+dist/
+
+# Local env/secrets
+.env
+.env.*
