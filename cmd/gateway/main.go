@@ -1,7 +1,37 @@
 package main
 
-import "log"
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"cozy-critter-puzzle-parlor/internal/gateway"
+)
 
 func main() {
-	log.Println("cozy critter gateway: not yet implemented (see IMPLEMENTATION_PLAN.md, Milestone 1)")
+	brokers := strings.Split(getEnv("KAFKA_BROKERS", "localhost:9092"), ",")
+	addr := ":" + getEnv("PORT", "8080")
+
+	gw := gateway.New(brokers, "echo-test")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := gw.EnsureTopic(ctx); err != nil {
+		log.Fatalf("gateway: ensure topic: %v", err)
+	}
+	cancel()
+
+	log.Printf("gateway: listening on %s (kafka brokers: %v)", addr, brokers)
+	if err := http.ListenAndServe(addr, gw.Handler()); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
