@@ -23,7 +23,7 @@ func TestEchoRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	gw := New([]string{broker}, "echo-test")
+	gw := New([]string{broker}, "echo-test", nil)
 	if err := gw.EnsureTopic(ctx); err != nil {
 		t.Fatalf("ensure topic: %v", err)
 	}

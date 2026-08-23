@@ -17,12 +17,17 @@ import (
 )
 
 type Gateway struct {
-	brokers []string
-	topic   string
+	brokers        []string
+	topic          string
+	allowedOrigins []string
 }
 
-func New(brokers []string, topic string) *Gateway {
-	return &Gateway{brokers: brokers, topic: topic}
+// New creates a Gateway. allowedOrigins lists origin patterns (per
+// coder/websocket's AcceptOptions.OriginPatterns) permitted to open a
+// WebSocket connection from a browser; a nil/empty slice accepts same-origin
+// requests only.
+func New(brokers []string, topic string, allowedOrigins []string) *Gateway {
+	return &Gateway{brokers: brokers, topic: topic, allowedOrigins: allowedOrigins}
 }
 
 // EnsureTopic creates the gateway's topic (single partition, no
@@ -63,7 +68,9 @@ func (g *Gateway) Handler() http.Handler {
 }
 
 func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, nil)
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		OriginPatterns: g.allowedOrigins,
+	})
 	if err != nil {
 		log.Printf("gateway: accept: %v", err)
 		return

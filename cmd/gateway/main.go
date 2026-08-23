@@ -14,8 +14,9 @@ import (
 func main() {
 	brokers := strings.Split(getEnv("KAFKA_BROKERS", "localhost:9092"), ",")
 	addr := ":" + getEnv("PORT", "8080")
+	allowedOrigins := strings.Split(getEnv("ALLOWED_ORIGINS", "localhost:8081"), ",")
 
-	gw := gateway.New(brokers, "echo-test")
+	gw := gateway.New(brokers, "echo-test", allowedOrigins)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	if err := gw.EnsureTopic(ctx); err != nil {

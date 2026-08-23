@@ -1,0 +1,11 @@
+{
+  "name": "cozy-critter-frontend",
+  "private": true,
+  "description": "Static Phaser.js client for the Cozy Critter Puzzle Parlor gateway. No build step: phaser.min.js is vendored into vendor/ (see package.json's postinstall) and served as a plain static file.",
+  "dependencies": {
+    "phaser": "3.90.0"
+  },
+  "scripts": {
+    "postinstall": "mkdir -p vendor && cp node_modules/phaser/dist/phaser.min.js vendor/phaser.min.js"
+  }
+}
