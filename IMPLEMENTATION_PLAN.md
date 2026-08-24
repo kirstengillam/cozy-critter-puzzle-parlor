@@ -9,8 +9,9 @@ decided steps we're actually building against. Update this file as decisions cha
   Milestone 3 started; both done now.
 - **Milestone 2 (Room Sync): done (2.1–2.18).** Private code-joined rooms, movement, stub-filtered chat,
   and Kubernetes parity (Strimzi on `kind`, containerized gateway) all verified.
-- **Milestone 3 (Word Game & Economy):** 3.1–3.5 done (word list, session lifecycle, guess evaluation,
-  win/loss detection). Economy (3.6–3.8), frontend (3.9), and manual test (3.10) are next.
+- **Milestone 3 (Word Game & Economy): done (3.1–3.10).** Word list, session lifecycle, guess
+  evaluation, ephemeral economy with a real HMAC-verified ledger, and the frontend UI all built and
+  verified — including a full manual playthrough to a win with the correct reward credited.
 - **Milestone 4:** not started.
 
 ## Locked-in decisions
@@ -216,18 +217,27 @@ note: other word games and puzzle games will be added later, but starting with w
  proof of concept of other features
 
 **Economy (ephemeral)**
-3.6 Define `economy-ledger` payload as Go structs matching the PRD schema (transaction_id, player_id,
+3.6 ✅ Define `economy-ledger` payload as Go structs matching the PRD schema (transaction_id, player_id,
     action CREDIT/DEBIT, amount, verification data) — build the real-looking schema even though storage
-    is in-memory for now (see "Locked-in decisions").
-3.7 On session-completed (win), produce a `CREDIT` event sized by guesses used (e.g. fewer guesses =
-    more currency).
-3.8 Economy consumer: consumes `economy-ledger`, applies CREDIT/DEBIT against an in-memory
-    `map[player_id]balance` (guard with a mutex or a single-consumer-per-key pattern to avoid races),
-    pushes a `currency-balance-updated` event back to the client.
-3.9 Frontend: word-game UI (letter grid, on-screen keyboard, color feedback), currency balance visible
-    and ticking up on a win.
-3.10 Manual test: play a full game to a win, confirm balance increases by the expected amount; play a
-     losing game, confirm no credit.
+    is in-memory for now (see "Locked-in decisions"). `verification_hash` is a real HMAC-SHA256 over the
+    transaction fields (`internal/gateway/economy.go`), not a decorative string — the ledger consumer
+    actually recomputes and checks it.
+3.7 ✅ On session-completed (win), produce a `CREDIT` event sized by guesses used (e.g. fewer guesses =
+    more currency) — `wordgame.RewardForWin`, 60 down to 10 across the 6 allowed guesses. Done inline in
+    `handleGuess` rather than as a separate consumer reacting to the `SESSION_COMPLETED` event — we
+    already know the outcome synchronously at that point, so a fourth Kafka hop wasn't worth it.
+3.8 ✅ Economy consumer (`StartEconomyLedger`): consumes `economy-ledger`, verifies each entry's HMAC
+    before applying anything, applies CREDIT/DEBIT against an in-memory `map[player_id]balance`
+    (mutex-guarded), pushes a `CURRENCY_BALANCE_UPDATED` event back to the client. Needed a new
+    player-id-keyed connection registry in the hub (`registerPlayer`/`sendToPlayer`) since the word game
+    isn't room-scoped, so the existing room-based routing couldn't reach the player.
+3.9 ✅ Frontend: word-game UI (letter grid, on-screen keyboard, color feedback), currency balance visible
+    and ticking up on a win. "Play Word Game" works independent of room join; the lobby no longer hides
+    on room join so both can be used together.
+3.10 ✅ Manual test: play a full game to a win, confirm balance increases by the expected amount; play a
+     losing game, confirm no credit. Done live in a real browser (crane → shone → tense → dense, won in
+     4, balance became exactly 30 = reward for 4 guesses) plus automated integration tests for both the
+     win-credits and loss-credits-nothing paths.
 
 ## Milestone 4: Cosmetic Customization (Ephemeral Inventory)
 
