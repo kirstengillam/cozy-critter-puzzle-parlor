@@ -10,10 +10,13 @@ const WS_PORT = 8080;
 const GRID_SIZE = 32;
 const GRID_COLS = 16;
 const GRID_ROWS = 9;
+// Per-cell move time, not a flat per-move duration — there's no
+// pathfinding, so a click can land many cells away in a straight line,
+// and a flat duration made short hops crawl while long hops teleported.
 // At 200ms, the walking animation (8 frames @ 10fps = 800ms/cycle) barely
 // got 2 frames in before snapping back to idle — slowed down so the walk
 // cycle actually reads as walking.
-const MOVE_TWEEN_MS = 550;
+const MOVE_MS_PER_CELL = 550;
 
 // Displays the whole scene (background, critters, labels) at 2x CSS size
 // via Phaser's scale-manager zoom, without changing any grid/movement math
@@ -234,24 +237,30 @@ function onPlayerMoved(evt) {
   }
 
   const target = cellCenter(evt.target_x, evt.target_y);
-  if (target.x !== entry.image.x) {
-    // Sheet faces left by default; flip to face the direction of travel.
-    entry.image.setFlipX(target.x > entry.image.x);
+  const dx = target.x - entry.image.x;
+  const dy = target.y - entry.image.y;
+  const distance = Math.hypot(dx, dy);
+
+  if (distance > 0) {
+    // Sheet faces right by default; flip to face the direction of travel.
+    if (dx !== 0) entry.image.setFlipX(dx < 0);
+    entry.image.play(animKey(DEFAULT_CRITTER, "walking"), true);
+
+    const duration = (distance / GRID_SIZE) * MOVE_MS_PER_CELL;
+    scene.tweens.add({
+      targets: entry.image,
+      x: target.x,
+      y: target.y,
+      duration,
+      onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "idle"), true),
+    });
+    scene.tweens.add({
+      targets: entry.label,
+      x: target.x,
+      y: target.y + LABEL_OFFSET,
+      duration,
+    });
   }
-  entry.image.play(animKey(DEFAULT_CRITTER, "walking"), true);
-  scene.tweens.add({
-    targets: entry.image,
-    x: target.x,
-    y: target.y,
-    duration: MOVE_TWEEN_MS,
-    onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "idle"), true),
-  });
-  scene.tweens.add({
-    targets: entry.label,
-    x: target.x,
-    y: target.y + LABEL_OFFSET,
-    duration: MOVE_TWEEN_MS,
-  });
 
   if (
     evt.player_id === playerId &&
