@@ -6,4 +6,5 @@ set -euo pipefail
 
 cd /opt/cozy-critter
 git pull
-docker compose -f deploy/aws/docker-compose.yml up -d --build
+docker build -t cozy-critter-gateway:latest -f Dockerfile .
+docker compose -f deploy/aws/docker-compose.yml up -d
