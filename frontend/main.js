@@ -17,13 +17,23 @@ const MOVE_TWEEN_MS = 200;
 // below — the game's internal coordinate space stays GRID_COLS*GRID_SIZE.
 const ZOOM = 2;
 
-// Native cat sprites are 64x64; scale them down to fit a 32px grid cell.
-const CRITTER_SCALE = 0.5;
-const LABEL_OFFSET = 16;
+// Native cat sprites are 64x64. Scaled down to a bit larger than the 32px
+// grid cell on purpose (cozy chibi-style oversized avatars, not a strict
+// one-cell fit) — LABEL_OFFSET tracks half the resulting sprite height so
+// the name label still sits right at its feet.
+const CRITTER_SCALE = 0.7;
+const LABEL_OFFSET = 22;
 
 // Speech bubble shown above a player's sprite for each chat message,
-// alongside the persistent lobby chat log.
-const BUBBLE_OFFSET = 24;
+// alongside the persistent lobby chat log. TAIL_TIP_OFFSET is how far
+// above the sprite's center the tail's point sits; the rounded body is
+// drawn further up from there, sized to fit the text.
+const BUBBLE_TAIL_TIP_OFFSET = 26;
+const BUBBLE_TAIL_WIDTH = 10;
+const BUBBLE_TAIL_HEIGHT = 6;
+const BUBBLE_PADDING_X = 6;
+const BUBBLE_PADDING_Y = 4;
+const BUBBLE_CORNER_RADIUS = 6;
 const BUBBLE_DURATION_MS = 4000;
 const BUBBLE_WRAP_WIDTH = 110;
 
@@ -156,16 +166,42 @@ function showChatBubble(playerId, text) {
   if (entry.bubbleTimer) entry.bubbleTimer.remove(false);
   if (entry.bubble) entry.bubble.destroy();
 
-  entry.bubble = scene.add
-    .text(entry.image.x, entry.image.y - BUBBLE_OFFSET, text, {
+  // Text is measured unattached first so the rounded body can be sized
+  // to fit it, then both are combined into one container.
+  const label = scene.add
+    .text(0, 0, text, {
       fontSize: "9px",
       color: "#222222",
-      backgroundColor: "#ffffff",
-      padding: { x: 4, y: 2 },
       wordWrap: { width: BUBBLE_WRAP_WIDTH },
       align: "center",
     })
-    .setOrigin(0.5, 1);
+    .setOrigin(0.5, 0.5);
+
+  const bodyWidth = label.width + BUBBLE_PADDING_X * 2;
+  const bodyHeight = label.height + BUBBLE_PADDING_Y * 2;
+  const bodyLeft = -bodyWidth / 2;
+  const bodyTop = -BUBBLE_TAIL_HEIGHT - bodyHeight;
+
+  const bg = scene.add.graphics();
+  bg.fillStyle(0xffffff, 1);
+  bg.lineStyle(1, 0x333333, 1);
+  bg.fillRoundedRect(bodyLeft, bodyTop, bodyWidth, bodyHeight, BUBBLE_CORNER_RADIUS);
+  // The tail's base overlaps the body slightly so the seam between the
+  // two shapes doesn't show through the body's stroke.
+  bg.fillTriangle(
+    -BUBBLE_TAIL_WIDTH / 2,
+    -BUBBLE_TAIL_HEIGHT + 1,
+    BUBBLE_TAIL_WIDTH / 2,
+    -BUBBLE_TAIL_HEIGHT + 1,
+    0,
+    0,
+  );
+  bg.strokeRoundedRect(bodyLeft, bodyTop, bodyWidth, bodyHeight, BUBBLE_CORNER_RADIUS);
+
+  label.setPosition(0, bodyTop + bodyHeight / 2);
+
+  const container = scene.add.container(entry.image.x, entry.image.y - BUBBLE_TAIL_TIP_OFFSET, [bg, label]);
+  entry.bubble = container;
 
   entry.bubbleTimer = scene.time.delayedCall(BUBBLE_DURATION_MS, () => {
     entry.bubble?.destroy();
@@ -436,7 +472,7 @@ new Phaser.Game({
     },
     update: function () {
       for (const entry of Object.values(sprites)) {
-        entry.bubble?.setPosition(entry.image.x, entry.image.y - BUBBLE_OFFSET);
+        entry.bubble?.setPosition(entry.image.x, entry.image.y - BUBBLE_TAIL_TIP_OFFSET);
       }
     },
   },
