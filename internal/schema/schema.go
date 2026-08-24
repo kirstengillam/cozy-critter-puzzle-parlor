@@ -17,6 +17,8 @@ const (
 	TypeRoomCreated = "ROOM_CREATED"
 	TypeJoinRoom    = "JOIN_ROOM"
 	TypeJoined      = "JOINED"
+	TypeMove        = "MOVE"
+	TypePlayerMoved = "PLAYER_MOVED"
 	TypeError       = "ERROR"
 )
 
@@ -40,4 +42,29 @@ type Joined struct {
 // ErrorPayload is the payload for an ERROR response.
 type ErrorPayload struct {
 	Message string `json:"message"`
+}
+
+// MoveRequest is the payload a client sends over WS to move; the server
+// fills in everything else (current position, event id, timestamp) to
+// build the full PlayerPositionEvent.
+type MoveRequest struct {
+	TargetX         int    `json:"target_x"`
+	TargetY         int    `json:"target_y"`
+	FacingDirection string `json:"facing_direction"`
+}
+
+// PlayerPositionEvent is both the player-positions Kafka message shape
+// (per the PRD schema) and the PLAYER_MOVED broadcast payload sent to
+// every connection in the room.
+type PlayerPositionEvent struct {
+	EventID         string `json:"event_id"`
+	Timestamp       int64  `json:"timestamp"`
+	PlayerID        string `json:"player_id"`
+	RoomID          string `json:"room_id"`
+	Action          string `json:"action"`
+	CurrentX        int    `json:"current_x"`
+	CurrentY        int    `json:"current_y"`
+	TargetX         int    `json:"target_x"`
+	TargetY         int    `json:"target_y"`
+	FacingDirection string `json:"facing_direction"`
 }

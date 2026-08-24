@@ -1,17 +1,20 @@
 // Package gateway is the WebSocket entrypoint for the game. Milestone 1
 // proved the WebSocket<->Kafka wiring with a throwaway echo topic; this
-// package now implements the real message protocol, starting with room
-// lifecycle (Milestone 2). See IMPLEMENTATION_PLAN.md.
+// package now implements the real message protocol: room lifecycle and
+// movement (Milestone 2). See IMPLEMENTATION_PLAN.md.
 package gateway
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/segmentio/kafka-go"
@@ -20,10 +23,16 @@ import (
 	"cozy-critter-puzzle-parlor/internal/schema"
 )
 
+const topicPlayerPositions = "player-positions"
+
+const PlayerPositionsPartitions = 6
+
 type Gateway struct {
 	brokers        []string
 	allowedOrigins []string
 	rooms          *room.Registry
+	hub            *hub
+	moveWriter     *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -35,13 +44,21 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 		brokers:        brokers,
 		allowedOrigins: allowedOrigins,
 		rooms:          room.NewRegistry(),
+		hub:            newHub(),
+		moveWriter: &kafka.Writer{
+			Addr:  kafka.TCP(brokers...),
+			Topic: topicPlayerPositions,
+			// Keying by room code keeps a room's events on a single
+			// partition (ordering per room), and is the natural unit a
+			// future multi-instance broadcaster would parallelize over.
+			Balancer: &kafka.Hash{},
+		},
 	}
 }
 
-// EnsureTopic creates a topic (single partition, no replication) if it
-// doesn't already exist. Call once at startup for each topic the gateway
-// produces/consumes.
-func (g *Gateway) EnsureTopic(ctx context.Context, topic string) error {
+// EnsureTopic creates a topic (no replication) if it doesn't already
+// exist. Call once at startup for each topic the gateway produces/consumes.
+func (g *Gateway) EnsureTopic(ctx context.Context, topic string, numPartitions int) error {
 	conn, err := kafka.DialContext(ctx, "tcp", g.brokers[0])
 	if err != nil {
 		return err
@@ -61,12 +78,87 @@ func (g *Gateway) EnsureTopic(ctx context.Context, topic string) error {
 
 	err = controllerConn.CreateTopics(kafka.TopicConfig{
 		Topic:             topic,
-		NumPartitions:     1,
+		NumPartitions:     numPartitions,
 		ReplicationFactor: 1,
 	})
 	if err != nil && !errors.Is(err, kafka.TopicAlreadyExists) {
 		return err
 	}
+	return nil
+}
+
+// StartMovementBroadcast starts one background consumer per partition of
+// player-positions, each fanning events out to every connection in that
+// event's room. Call once at startup, after
+// EnsureTopic(ctx, "player-positions", ...) and before accepting any
+// connections: it synchronously positions every partition reader at the
+// topic's current end before returning, so a message produced right after
+// this call can't be missed.
+//
+// A consumer-group reader would auto-balance partitions across future
+// gateway instances, but its initial join/rebalance handshake takes long
+// enough that a message produced immediately after start-up can land
+// before the group finishes joining — and since a partition assignment,
+// once positioned, only sees new messages, that first message is silently
+// dropped (the same class of race Milestone 1 hit and fixed for the
+// echo-test reader, just with a much bigger window). Direct partition
+// readers avoid that handshake entirely. The tradeoff: splitting rooms
+// across multiple gateway instances later needs a different mechanism
+// than "join the same group" — see "Open / deferred" in
+// IMPLEMENTATION_PLAN.md.
+func (g *Gateway) StartMovementBroadcast(ctx context.Context) error {
+	for partition := 0; partition < PlayerPositionsPartitions; partition++ {
+		if err := g.startPartitionBroadcaster(ctx, partition); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *Gateway) startPartitionBroadcaster(ctx context.Context, partition int) error {
+	leader, err := kafka.DialLeader(ctx, "tcp", g.brokers[0], topicPlayerPositions, partition)
+	if err != nil {
+		return err
+	}
+	startOffset, err := leader.ReadLastOffset()
+	leader.Close()
+	if err != nil {
+		return err
+	}
+
+	reader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:   g.brokers,
+		Topic:     topicPlayerPositions,
+		Partition: partition,
+	})
+	if err := reader.SetOffset(startOffset); err != nil {
+		reader.Close()
+		return err
+	}
+
+	go func() {
+		defer reader.Close()
+		for {
+			msg, err := reader.ReadMessage(ctx)
+			if err != nil {
+				return
+			}
+			var evt schema.PlayerPositionEvent
+			if err := json.Unmarshal(msg.Value, &evt); err != nil {
+				log.Printf("gateway: bad player-position event: %v", err)
+				continue
+			}
+
+			g.hub.setPosition(evt.RoomID, evt.PlayerID, position{X: evt.TargetX, Y: evt.TargetY})
+
+			data, err := marshalEnvelope(schema.TypePlayerMoved, evt)
+			if err != nil {
+				log.Printf("gateway: marshal player-moved broadcast: %v", err)
+				continue
+			}
+			g.hub.broadcast(ctx, evt.RoomID, data)
+		}
+	}()
 	return nil
 }
 
@@ -77,24 +169,28 @@ func (g *Gateway) Handler() http.Handler {
 }
 
 func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+	wsConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		OriginPatterns: g.allowedOrigins,
 	})
 	if err != nil {
 		log.Printf("gateway: accept: %v", err)
 		return
 	}
-	defer conn.CloseNow()
+	defer wsConn.CloseNow()
 
+	conn := &safeConn{conn: wsConn}
 	ctx := r.Context()
 
-	// Which room (if any) this connection has joined. Only referenced
-	// within this handler for now; becomes relevant to broadcast once
-	// movement/chat land later in Milestone 2.
-	var joinedRoomCode string
+	// Which room/player this connection has joined, if any.
+	var joinedRoomCode, playerID string
+	defer func() {
+		if joinedRoomCode != "" && playerID != "" {
+			g.hub.leave(joinedRoomCode, playerID)
+		}
+	}()
 
 	for {
-		_, data, err := conn.Read(ctx)
+		_, data, err := wsConn.Read(ctx)
 		if err != nil {
 			break
 		}
@@ -110,20 +206,21 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 			g.handleCreateRoom(ctx, conn)
 
 		case schema.TypeJoinRoom:
-			code, err := g.handleJoinRoom(ctx, conn, env.Payload)
+			code, id, err := g.handleJoinRoom(ctx, conn, env.Payload)
 			if err == nil {
-				joinedRoomCode = code
+				joinedRoomCode, playerID = code, id
 			}
+
+		case schema.TypeMove:
+			g.handleMove(ctx, conn, joinedRoomCode, playerID, env.Payload)
 
 		default:
 			g.sendError(ctx, conn, "unknown message type: "+env.Type)
 		}
 	}
-
-	_ = joinedRoomCode
 }
 
-func (g *Gateway) handleCreateRoom(ctx context.Context, conn *websocket.Conn) {
+func (g *Gateway) handleCreateRoom(ctx context.Context, conn *safeConn) {
 	code, err := g.rooms.Create()
 	if err != nil {
 		log.Printf("gateway: create room: %v", err)
@@ -133,37 +230,90 @@ func (g *Gateway) handleCreateRoom(ctx context.Context, conn *websocket.Conn) {
 	g.send(ctx, conn, schema.TypeRoomCreated, schema.RoomCreated{RoomCode: code})
 }
 
-// handleJoinRoom returns the joined room code on success.
-func (g *Gateway) handleJoinRoom(ctx context.Context, conn *websocket.Conn, payload json.RawMessage) (string, error) {
+// handleJoinRoom returns the joined room code and player id on success.
+func (g *Gateway) handleJoinRoom(ctx context.Context, conn *safeConn, payload json.RawMessage) (string, string, error) {
 	var req schema.JoinRoomRequest
 	if err := json.Unmarshal(payload, &req); err != nil {
 		g.sendError(ctx, conn, "invalid join_room payload")
-		return "", err
+		return "", "", err
 	}
 	if !g.rooms.Exists(req.RoomCode) {
 		g.sendError(ctx, conn, "unknown room code")
-		return "", errors.New("unknown room code")
+		return "", "", errors.New("unknown room code")
 	}
+	g.hub.join(req.RoomCode, req.PlayerID, conn)
 	g.send(ctx, conn, schema.TypeJoined, schema.Joined{RoomCode: req.RoomCode, PlayerID: req.PlayerID})
-	return req.RoomCode, nil
+	return req.RoomCode, req.PlayerID, nil
 }
 
-func (g *Gateway) sendError(ctx context.Context, conn *websocket.Conn, message string) {
+func (g *Gateway) handleMove(ctx context.Context, conn *safeConn, roomCode, playerID string, payload json.RawMessage) {
+	if roomCode == "" || playerID == "" {
+		g.sendError(ctx, conn, "must join a room before moving")
+		return
+	}
+	var req schema.MoveRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		g.sendError(ctx, conn, "invalid move payload")
+		return
+	}
+
+	current := g.hub.currentPosition(roomCode, playerID)
+	evt := schema.PlayerPositionEvent{
+		EventID:         newEventID(),
+		Timestamp:       time.Now().UnixMilli(),
+		PlayerID:        playerID,
+		RoomID:          roomCode,
+		Action:          "MOVE",
+		CurrentX:        current.X,
+		CurrentY:        current.Y,
+		TargetX:         req.TargetX,
+		TargetY:         req.TargetY,
+		FacingDirection: req.FacingDirection,
+	}
+
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal move event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := g.moveWriter.WriteMessages(writeCtx, kafka.Message{
+		Key:   []byte(roomCode),
+		Value: raw,
+	}); err != nil {
+		log.Printf("gateway: produce move event: %v", err)
+		g.sendError(ctx, conn, "could not process move")
+	}
+}
+
+func (g *Gateway) sendError(ctx context.Context, conn *safeConn, message string) {
 	g.send(ctx, conn, schema.TypeError, schema.ErrorPayload{Message: message})
 }
 
-func (g *Gateway) send(ctx context.Context, conn *websocket.Conn, msgType string, payload any) {
-	raw, err := json.Marshal(payload)
+func (g *Gateway) send(ctx context.Context, conn *safeConn, msgType string, payload any) {
+	data, err := marshalEnvelope(msgType, payload)
 	if err != nil {
-		log.Printf("gateway: marshal %s payload: %v", msgType, err)
+		log.Printf("gateway: marshal %s: %v", msgType, err)
 		return
 	}
-	data, err := json.Marshal(schema.Envelope{Type: msgType, Payload: raw})
-	if err != nil {
-		log.Printf("gateway: marshal %s envelope: %v", msgType, err)
-		return
-	}
-	if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+	if err := conn.Write(ctx, data); err != nil {
 		log.Printf("gateway: write %s: %v", msgType, err)
 	}
+}
+
+func marshalEnvelope(msgType string, payload any) ([]byte, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(schema.Envelope{Type: msgType, Payload: raw})
+}
+
+func newEventID() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }
