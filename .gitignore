@@ -14,6 +14,13 @@ dist/
 .env
 .env.*
 
+# Terraform local state/cache (deploy/aws/terraform)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log
+
 # Purchased asset archives — extracted contents live under
 # frontend/assets/; no need to keep the compressed originals in git.
 *.rar

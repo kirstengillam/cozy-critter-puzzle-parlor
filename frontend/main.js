@@ -116,8 +116,15 @@ function send(type, payload) {
   socket.send(JSON.stringify({ type, payload: payload ?? {} }));
 }
 
+function wsUrl() {
+  if (location.protocol === "https:") {
+    return `wss://${location.host}/ws`;
+  }
+  return `ws://${location.hostname}:${WS_PORT}/ws`;
+}
+
 function connect() {
-  socket = new WebSocket(`ws://${location.hostname}:${WS_PORT}/ws`);
+  socket = new WebSocket(wsUrl());
   socket.addEventListener("open", () => setStatus(`connected as ${playerId}`));
   socket.addEventListener("close", () => setStatus("disconnected"));
   socket.addEventListener("error", () => setStatus("connection error"));

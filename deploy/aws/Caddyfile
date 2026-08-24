@@ -1,0 +1,9 @@
+cozycritterpuzzleparlor.com {
+    handle /ws {
+        reverse_proxy gateway:8080
+    }
+    handle {
+        root * /srv
+        file_server
+    }
+}
