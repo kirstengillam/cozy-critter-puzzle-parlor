@@ -6,6 +6,7 @@
   <style>
     body { font-family: sans-serif; background: #1c1c26; color: #eee; }
     #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+    #play-area { display: flex; gap: 1.5rem; align-items: flex-start; }
     #room { display: none; }
     #status { font-size: 0.9rem; color: #aaa; }
     #balance { font-size: 0.9rem; color: #e8a33d; }
@@ -15,7 +16,7 @@
     #chat-log p.rejected { color: #d98a8a; font-style: italic; }
     #chat-input { width: 360px; }
 
-    #wordgame { display: none; margin-top: 1rem; }
+    #wordgame { display: none; }
     #word-grid { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.75rem; }
     .word-row { display: flex; gap: 4px; }
     .tile {
@@ -50,19 +51,21 @@
   </div>
   <p id="status"></p>
   <p id="balance">Critter Coins: <span id="balance-amount">0</span></p>
-  <div id="room">
-    <div id="game"></div>
-    <div id="chat">
-      <div id="chat-log"></div>
-      <input id="chat-input" placeholder="say something..." maxlength="200" />
-      <button id="chat-send">Send</button>
+  <div id="play-area">
+    <div id="room">
+      <div id="game"></div>
+      <div id="chat">
+        <div id="chat-log"></div>
+        <input id="chat-input" placeholder="say something..." maxlength="200" />
+        <button id="chat-send">Send</button>
+      </div>
     </div>
-  </div>
-  <div id="wordgame">
-    <div id="word-grid"></div>
-    <div id="keyboard"></div>
-    <p id="wordgame-status"></p>
-    <button id="new-game">New Game</button>
+    <div id="wordgame">
+      <div id="word-grid"></div>
+      <div id="keyboard"></div>
+      <p id="wordgame-status"></p>
+      <button id="new-game">New Game</button>
+    </div>
   </div>
   <script src="vendor/phaser.min.js"></script>
   <script type="module" src="main.js"></script>
