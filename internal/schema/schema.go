@@ -13,13 +13,16 @@ type Envelope struct {
 }
 
 const (
-	TypeCreateRoom  = "CREATE_ROOM"
-	TypeRoomCreated = "ROOM_CREATED"
-	TypeJoinRoom    = "JOIN_ROOM"
-	TypeJoined      = "JOINED"
-	TypeMove        = "MOVE"
-	TypePlayerMoved = "PLAYER_MOVED"
-	TypeError       = "ERROR"
+	TypeCreateRoom   = "CREATE_ROOM"
+	TypeRoomCreated  = "ROOM_CREATED"
+	TypeJoinRoom     = "JOIN_ROOM"
+	TypeJoined       = "JOINED"
+	TypeMove         = "MOVE"
+	TypePlayerMoved  = "PLAYER_MOVED"
+	TypeChat         = "CHAT"
+	TypeChatMessage  = "CHAT_MESSAGE"
+	TypeChatRejected = "CHAT_REJECTED"
+	TypeError        = "ERROR"
 )
 
 // JoinRoomRequest is the payload for a JOIN_ROOM message.
@@ -67,4 +70,24 @@ type PlayerPositionEvent struct {
 	TargetX         int    `json:"target_x"`
 	TargetY         int    `json:"target_y"`
 	FacingDirection string `json:"facing_direction"`
+}
+
+// ChatRequest is the payload a client sends over WS to chat; the server
+// fills in everything else to build the full ChatMessageEvent.
+type ChatRequest struct {
+	Text string `json:"text"`
+}
+
+// ChatMessageEvent is both the chat-messages Kafka message shape (per the
+// PRD schema) and the CHAT_MESSAGE/CHAT_REJECTED payload sent back over
+// WS — Status distinguishes PENDING_VALIDATION (never seen by clients),
+// APPROVED (broadcast to the room), and REJECTED (sent only to the
+// sender).
+type ChatMessageEvent struct {
+	MessageID string `json:"message_id"`
+	Timestamp int64  `json:"timestamp"`
+	PlayerID  string `json:"player_id"`
+	RoomID    string `json:"room_id"`
+	RawText   string `json:"raw_text"`
+	Status    string `json:"status"`
 }

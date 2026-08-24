@@ -16,7 +16,9 @@ const sprites = {}; // player_id -> Phaser.GameObjects.Image
 const statusEl = document.getElementById("status");
 const roomCodeInput = document.getElementById("room-code-input");
 const lobbyEl = document.getElementById("lobby");
-const gameEl = document.getElementById("game");
+const roomEl = document.getElementById("room");
+const chatLogEl = document.getElementById("chat-log");
+const chatInputEl = document.getElementById("chat-input");
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -45,15 +47,29 @@ function handleMessage(event) {
       roomCode = env.payload.room_code;
       setStatus(`joined room ${roomCode} as ${playerId}`);
       lobbyEl.style.display = "none";
-      gameEl.style.display = "block";
+      roomEl.style.display = "block";
       break;
     case "PLAYER_MOVED":
       onPlayerMoved(env.payload);
+      break;
+    case "CHAT_MESSAGE":
+      appendChatLine(`${env.payload.player_id}: ${env.payload.raw_text}`, false);
+      break;
+    case "CHAT_REJECTED":
+      appendChatLine(`(your message was rejected: "${env.payload.raw_text}")`, true);
       break;
     case "ERROR":
       setStatus(`error: ${env.payload.message}`);
       break;
   }
+}
+
+function appendChatLine(text, rejected) {
+  const p = document.createElement("p");
+  p.textContent = text;
+  if (rejected) p.className = "rejected";
+  chatLogEl.appendChild(p);
+  chatLogEl.scrollTop = chatLogEl.scrollHeight;
 }
 
 function cellCenter(cellX, cellY) {
@@ -90,6 +106,17 @@ document.getElementById("join-room").addEventListener("click", () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (!code) return;
   send("JOIN_ROOM", { player_id: playerId, room_code: code });
+});
+
+function sendChat() {
+  const text = chatInputEl.value.trim();
+  if (!text || !roomCode) return;
+  send("CHAT", { text });
+  chatInputEl.value = "";
+}
+document.getElementById("chat-send").addEventListener("click", sendChat);
+chatInputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") sendChat();
 });
 
 connect();

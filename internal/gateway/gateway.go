@@ -24,8 +24,10 @@ import (
 )
 
 const topicPlayerPositions = "player-positions"
+const topicChatMessages = "chat-messages"
 
 const PlayerPositionsPartitions = 6
+const ChatMessagesPartitions = 6
 
 type Gateway struct {
 	brokers        []string
@@ -33,6 +35,7 @@ type Gateway struct {
 	rooms          *room.Registry
 	hub            *hub
 	moveWriter     *kafka.Writer
+	chatWriter     *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -51,6 +54,11 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 			// Keying by room code keeps a room's events on a single
 			// partition (ordering per room), and is the natural unit a
 			// future multi-instance broadcaster would parallelize over.
+			Balancer: &kafka.Hash{},
+		},
+		chatWriter: &kafka.Writer{
+			Addr:     kafka.TCP(brokers...),
+			Topic:    topicChatMessages,
 			Balancer: &kafka.Hash{},
 		},
 	}
@@ -108,22 +116,82 @@ func (g *Gateway) EnsureTopic(ctx context.Context, topic string, numPartitions i
 // IMPLEMENTATION_PLAN.md.
 func (g *Gateway) StartMovementBroadcast(ctx context.Context) error {
 	for partition := 0; partition < PlayerPositionsPartitions; partition++ {
-		if err := g.startPartitionBroadcaster(ctx, partition); err != nil {
+		partition := partition
+		err := startPartitionConsumer(ctx, g.brokers, topicPlayerPositions, partition, func(msg kafka.Message) {
+			var evt schema.PlayerPositionEvent
+			if err := json.Unmarshal(msg.Value, &evt); err != nil {
+				log.Printf("gateway: bad player-position event: %v", err)
+				return
+			}
+
+			g.hub.setPosition(evt.RoomID, evt.PlayerID, position{X: evt.TargetX, Y: evt.TargetY})
+
+			data, err := marshalEnvelope(schema.TypePlayerMoved, evt)
+			if err != nil {
+				log.Printf("gateway: marshal player-moved broadcast: %v", err)
+				return
+			}
+			g.hub.broadcast(ctx, evt.RoomID, data)
+		})
+		if err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (g *Gateway) startPartitionBroadcaster(ctx context.Context, partition int) error {
-	// Right after CreateTopics, a partition's leader metadata can take a
-	// moment to propagate — DialLeader/ReadLastOffset can transiently fail
-	// with "Not Leader For Partition" even on a single broker. Retry briefly
-	// rather than fail startup over a race that clears itself in well under
-	// a second.
+// StartChatFilter starts one background consumer per partition of
+// chat-messages, running each message through the stub filter (see
+// filter.go) and either broadcasting it (APPROVED) or sending it back
+// only to its sender (REJECTED). Call once at startup, after
+// EnsureTopic(ctx, "chat-messages", ...) — same startup-ordering and
+// direct-partition-reader reasoning as StartMovementBroadcast.
+func (g *Gateway) StartChatFilter(ctx context.Context) error {
+	for partition := 0; partition < ChatMessagesPartitions; partition++ {
+		partition := partition
+		err := startPartitionConsumer(ctx, g.brokers, topicChatMessages, partition, func(msg kafka.Message) {
+			var evt schema.ChatMessageEvent
+			if err := json.Unmarshal(msg.Value, &evt); err != nil {
+				log.Printf("gateway: bad chat-message event: %v", err)
+				return
+			}
+
+			if isChatApproved(evt.RawText) {
+				evt.Status = "APPROVED"
+				data, err := marshalEnvelope(schema.TypeChatMessage, evt)
+				if err != nil {
+					log.Printf("gateway: marshal chat-message broadcast: %v", err)
+					return
+				}
+				g.hub.broadcast(ctx, evt.RoomID, data)
+			} else {
+				evt.Status = "REJECTED"
+				data, err := marshalEnvelope(schema.TypeChatRejected, evt)
+				if err != nil {
+					log.Printf("gateway: marshal chat-rejected: %v", err)
+					return
+				}
+				g.hub.sendTo(ctx, evt.RoomID, evt.PlayerID, data)
+			}
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startPartitionConsumer positions a reader at partition's current end
+// (retrying briefly, since a partition's leader metadata can take a
+// moment to propagate right after CreateTopics) and starts a goroutine
+// calling handle for every subsequent message. Positioning happens
+// synchronously, before this function returns, so a message produced
+// right after can't be missed — see StartMovementBroadcast's doc comment
+// for why this avoids a consumer group.
+func startPartitionConsumer(ctx context.Context, brokers []string, topic string, partition int, handle func(kafka.Message)) error {
 	var startOffset int64
 	err := retry(ctx, 10, 200*time.Millisecond, func() error {
-		leader, err := kafka.DialLeader(ctx, "tcp", g.brokers[0], topicPlayerPositions, partition)
+		leader, err := kafka.DialLeader(ctx, "tcp", brokers[0], topic, partition)
 		if err != nil {
 			return err
 		}
@@ -136,8 +204,8 @@ func (g *Gateway) startPartitionBroadcaster(ctx context.Context, partition int) 
 	}
 
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:   g.brokers,
-		Topic:     topicPlayerPositions,
+		Brokers:   brokers,
+		Topic:     topic,
 		Partition: partition,
 	})
 	if err := reader.SetOffset(startOffset); err != nil {
@@ -152,20 +220,7 @@ func (g *Gateway) startPartitionBroadcaster(ctx context.Context, partition int) 
 			if err != nil {
 				return
 			}
-			var evt schema.PlayerPositionEvent
-			if err := json.Unmarshal(msg.Value, &evt); err != nil {
-				log.Printf("gateway: bad player-position event: %v", err)
-				continue
-			}
-
-			g.hub.setPosition(evt.RoomID, evt.PlayerID, position{X: evt.TargetX, Y: evt.TargetY})
-
-			data, err := marshalEnvelope(schema.TypePlayerMoved, evt)
-			if err != nil {
-				log.Printf("gateway: marshal player-moved broadcast: %v", err)
-				continue
-			}
-			g.hub.broadcast(ctx, evt.RoomID, data)
+			handle(msg)
 		}
 	}()
 	return nil
@@ -222,6 +277,9 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case schema.TypeMove:
 			g.handleMove(ctx, conn, joinedRoomCode, playerID, env.Payload)
+
+		case schema.TypeChat:
+			g.handleChat(ctx, conn, joinedRoomCode, playerID, env.Payload)
 
 		default:
 			g.sendError(ctx, conn, "unknown message type: "+env.Type)
@@ -287,15 +345,56 @@ func (g *Gateway) handleMove(ctx context.Context, conn *safeConn, roomCode, play
 		return
 	}
 
-	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := g.moveWriter.WriteMessages(writeCtx, kafka.Message{
-		Key:   []byte(roomCode),
-		Value: raw,
-	}); err != nil {
+	if err := produce(ctx, g.moveWriter, roomCode, raw); err != nil {
 		log.Printf("gateway: produce move event: %v", err)
 		g.sendError(ctx, conn, "could not process move")
 	}
+}
+
+func (g *Gateway) handleChat(ctx context.Context, conn *safeConn, roomCode, playerID string, payload json.RawMessage) {
+	if roomCode == "" || playerID == "" {
+		g.sendError(ctx, conn, "must join a room before chatting")
+		return
+	}
+	var req schema.ChatRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		g.sendError(ctx, conn, "invalid chat payload")
+		return
+	}
+
+	evt := schema.ChatMessageEvent{
+		MessageID: newEventID(),
+		Timestamp: time.Now().UnixMilli(),
+		PlayerID:  playerID,
+		RoomID:    roomCode,
+		RawText:   req.Text,
+		Status:    "PENDING_VALIDATION",
+	}
+
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal chat event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+
+	if err := produce(ctx, g.chatWriter, roomCode, raw); err != nil {
+		log.Printf("gateway: produce chat event: %v", err)
+		g.sendError(ctx, conn, "could not process chat message")
+	}
+}
+
+// produce writes a single message keyed by roomCode, retrying briefly on
+// transient errors like "Unknown Topic Or Partition" — the producer-side
+// counterpart to startPartitionConsumer's retry: right after EnsureTopic
+// creates a topic, a connection's cached metadata can be stale for a
+// moment even on a single broker.
+func produce(ctx context.Context, writer *kafka.Writer, roomCode string, value []byte) error {
+	return retry(ctx, 10, 200*time.Millisecond, func() error {
+		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return writer.WriteMessages(writeCtx, kafka.Message{Key: []byte(roomCode), Value: value})
+	})
 }
 
 func (g *Gateway) sendError(ctx context.Context, conn *safeConn, message string) {

@@ -209,3 +209,91 @@ func TestMovementBroadcast(t *testing.T) {
 	checkMoved("observer", readEnvelope(t, ctx, observer))
 	checkMoved("mover", readEnvelope(t, ctx, mover))
 }
+
+func TestChatApprovedBroadcastsAndRejectedStaysPrivate(t *testing.T) {
+	const broker = "localhost:9092"
+
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "chat-messages", ChatMessagesPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.StartChatFilter(ctx); err != nil {
+		t.Fatalf("start chat filter: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	speaker := dial(t, srv)
+	defer speaker.CloseNow()
+
+	listener := dial(t, srv)
+	defer listener.CloseNow()
+
+	sendEnvelope(t, ctx, speaker, schema.TypeCreateRoom, struct{}{})
+	created := readEnvelope(t, ctx, speaker)
+	var room schema.RoomCreated
+	if err := json.Unmarshal(created.Payload, &room); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+
+	sendEnvelope(t, ctx, speaker, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "speaker", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, speaker); env.Type != schema.TypeJoined {
+		t.Fatalf("speaker join: got %q, want JOINED", env.Type)
+	}
+
+	sendEnvelope(t, ctx, listener, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "listener", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, listener); env.Type != schema.TypeJoined {
+		t.Fatalf("listener join: got %q, want JOINED", env.Type)
+	}
+
+	// Approved message: both speaker and listener should see it broadcast.
+	sendEnvelope(t, ctx, speaker, schema.TypeChat, schema.ChatRequest{Text: "hey everyone!"})
+
+	checkApproved := func(who, wantText string, env schema.Envelope) {
+		t.Helper()
+		if env.Type != schema.TypeChatMessage {
+			t.Fatalf("%s: got envelope type %q, want %q", who, env.Type, schema.TypeChatMessage)
+		}
+		var evt schema.ChatMessageEvent
+		if err := json.Unmarshal(env.Payload, &evt); err != nil {
+			t.Fatalf("%s: unmarshal ChatMessageEvent: %v", who, err)
+		}
+		if evt.PlayerID != "speaker" || evt.RoomID != room.RoomCode || evt.RawText != wantText || evt.Status != "APPROVED" {
+			t.Fatalf("%s: unexpected event %+v", who, evt)
+		}
+	}
+	checkApproved("listener", "hey everyone!", readEnvelope(t, ctx, listener))
+	checkApproved("speaker", "hey everyone!", readEnvelope(t, ctx, speaker))
+
+	// Rejected message: only the speaker should hear back, and only
+	// CHAT_REJECTED — the listener gets nothing for this one.
+	sendEnvelope(t, ctx, speaker, schema.TypeChat, schema.ChatRequest{Text: "you're a badword"})
+
+	rejectedEnv := readEnvelope(t, ctx, speaker)
+	if rejectedEnv.Type != schema.TypeChatRejected {
+		t.Fatalf("speaker: got envelope type %q, want %q", rejectedEnv.Type, schema.TypeChatRejected)
+	}
+	var rejected schema.ChatMessageEvent
+	if err := json.Unmarshal(rejectedEnv.Payload, &rejected); err != nil {
+		t.Fatalf("unmarshal rejected ChatMessageEvent: %v", err)
+	}
+	if rejected.Status != "REJECTED" || rejected.PlayerID != "speaker" {
+		t.Fatalf("unexpected rejected event %+v", rejected)
+	}
+
+	// Confirm the listener never receives anything for the rejected
+	// message: send one more approved message and check it's the very
+	// next thing the listener sees.
+	sendEnvelope(t, ctx, speaker, schema.TypeChat, schema.ChatRequest{Text: "sorry, ignore that"})
+	checkApproved("listener (after rejection)", "sorry, ignore that", readEnvelope(t, ctx, listener))
+}

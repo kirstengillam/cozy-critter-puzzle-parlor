@@ -98,3 +98,21 @@ func (h *hub) broadcast(ctx context.Context, roomCode string, data []byte) {
 		cancel()
 	}
 }
+
+// sendTo sends data to a single connection, if that player is currently
+// in roomCode. Used for feedback (like a rejected chat message) that
+// should reach only the player who triggered it, not the whole room.
+func (h *hub) sendTo(ctx context.Context, roomCode, playerID string, data []byte) {
+	h.mu.Lock()
+	c := h.conns[roomCode][playerID]
+	h.mu.Unlock()
+	if c == nil {
+		return
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := c.Write(writeCtx, data); err != nil {
+		log.Printf("gateway: send to %s/%s: %v", roomCode, playerID, err)
+	}
+}

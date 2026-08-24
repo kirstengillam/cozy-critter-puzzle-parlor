@@ -22,10 +22,16 @@ func main() {
 	if err := gw.EnsureTopic(setupCtx, "player-positions", gateway.PlayerPositionsPartitions); err != nil {
 		log.Fatalf("gateway: ensure player-positions topic: %v", err)
 	}
+	if err := gw.EnsureTopic(setupCtx, "chat-messages", gateway.ChatMessagesPartitions); err != nil {
+		log.Fatalf("gateway: ensure chat-messages topic: %v", err)
+	}
 	cancel()
 
 	if err := gw.StartMovementBroadcast(context.Background()); err != nil {
 		log.Fatalf("gateway: start movement broadcast: %v", err)
+	}
+	if err := gw.StartChatFilter(context.Background()); err != nil {
+		log.Fatalf("gateway: start chat filter: %v", err)
 	}
 
 	log.Printf("gateway: listening on %s (kafka brokers: %v)", addr, brokers)

@@ -6,8 +6,13 @@
   <style>
     body { font-family: sans-serif; background: #1c1c26; color: #eee; }
     #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
-    #game { display: none; }
+    #room { display: none; }
     #status { font-size: 0.9rem; color: #aaa; }
+    #chat { max-width: 480px; margin-top: 0.5rem; }
+    #chat-log { height: 120px; overflow-y: auto; background: #14141c; padding: 0.4rem; font-size: 0.85rem; }
+    #chat-log p { margin: 0 0 0.2rem 0; }
+    #chat-log p.rejected { color: #d98a8a; font-style: italic; }
+    #chat-input { width: 360px; }
   </style>
 </head>
 <body>
@@ -17,7 +22,14 @@
     <button id="join-room">Join Room</button>
   </div>
   <p id="status"></p>
-  <div id="game"></div>
+  <div id="room">
+    <div id="game"></div>
+    <div id="chat">
+      <div id="chat-log"></div>
+      <input id="chat-input" placeholder="say something..." maxlength="200" />
+      <button id="chat-send">Send</button>
+    </div>
+  </div>
   <script src="vendor/phaser.min.js"></script>
   <script type="module" src="main.js"></script>
 </body>
