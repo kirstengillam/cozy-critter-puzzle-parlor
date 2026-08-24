@@ -8,7 +8,9 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
   stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
-- **Milestone 2 (Room Sync):** 2.1–2.2 done (private code-joined rooms). Movement (2.3+) is next.
+- **Milestone 2 (Room Sync):** 2.1–2.6 done (private code-joined rooms; movement produce/broadcast
+  backend). Frontend rendering (2.7) and the two-tab manual test (2.8) are next; chat (2.9+) and k8s
+  parity (2.14+) after that.
 - **Milestones 3–4:** not started.
 
 ## Locked-in decisions
@@ -55,7 +57,9 @@ decided steps we're actually building against. Update this file as decisions cha
 - Live cloud deployment: undecided. Local + kind + strong docs is enough for now; revisit once the
   core loop works.
 - Full chat moderation system (rate limiting, reporting, mutes/bans).
-- Multi-instance gateway scaling design.
+- Multi-instance gateway scaling design. Note: a consumer-group-based broadcaster (auto-splitting
+  partitions/rooms across instances) turned out to have a startup race — see 2.6 — so this needs an
+  actual design, not just "add a GroupID," when it's picked up.
 - Persistent accounts (Postgres-backed): schema is decided (see above) but not built — inventory/
   currency are ephemeral until this lands.
 
@@ -96,15 +100,20 @@ can chat, with messages passing through a (stub) filter.
     broadcast.)
 
 **Movement**
-2.3 Define the `player-positions` payload as Go structs matching the PRD schema; put them in a shared
+2.3 ✅ Define the `player-positions` payload as Go structs matching the PRD schema; put them in a shared
     `internal/schema` package so gateway and any future consumers agree on the shape.
-2.4 Create the `player-positions` Kafka topic, partitioned by `room_id`.
-2.5 On a `MOVE` message from a joined client: validate shape, stamp `event_id`/`timestamp` server-side,
+2.4 ✅ Create the `player-positions` Kafka topic, partitioned by `room_id` (6 partitions, `kafka.Hash`
+    keyed by room code).
+2.5 ✅ On a `MOVE` message from a joined client: validate shape, stamp `event_id`/`timestamp` server-side,
     produce to `player-positions` keyed by `room_id`.
-2.6 Broadcast path: since the gateway is a single instance, the simplest correct approach is to consume
-    `player-positions` in-process and fan out directly to the room's connections (no need for a second
-    hop yet) — document this as the seam where multi-instance fan-out would later insert a real
-    consumer-group broadcast step.
+2.6 ✅ Broadcast path: `internal/gateway/hub.go` tracks per-room connections/positions; a background
+    reader consumes `player-positions` and fans out `PLAYER_MOVED` in-process. Originally used a
+    consumer-group reader, matching the "seam for later multi-instance fan-out" idea below — but its
+    join/rebalance handshake created a real race (a message produced right after startup could be
+    missed entirely, since a fresh partition assignment only sees messages after it positions). Fixed by
+    switching to direct per-partition readers positioned synchronously before startup returns (same
+    technique as the Milestone 1 fix). Multi-instance fan-out therefore still needs a mechanism
+    (deferred — see "Open / deferred" below), just not a consumer group as originally assumed.
 2.7 Frontend: Phaser scene renders a simple grid room; other players are sprites; on a broadcast MOVE
     event, tween the corresponding sprite toward the target position.
 2.8 Two-tab manual test: join both tabs to the same room code, move in Tab A, confirm Tab B updates.
