@@ -34,15 +34,49 @@ type position struct {
 // seam where multi-instance fan-out would later need to route across
 // gateway instances instead of just iterating an in-process map.
 type hub struct {
-	mu       sync.Mutex
-	conns    map[string]map[string]*safeConn // room code -> player id -> conn
-	position map[string]map[string]position  // room code -> player id -> last position
+	mu          sync.Mutex
+	conns       map[string]map[string]*safeConn // room code -> player id -> conn
+	position    map[string]map[string]position  // room code -> player id -> last position
+	playerConns map[string]*safeConn            // player id -> conn, independent of room
 }
 
 func newHub() *hub {
 	return &hub{
-		conns:    make(map[string]map[string]*safeConn),
-		position: make(map[string]map[string]position),
+		conns:       make(map[string]map[string]*safeConn),
+		position:    make(map[string]map[string]position),
+		playerConns: make(map[string]*safeConn),
+	}
+}
+
+// registerPlayer associates playerID with conn for features that route
+// to a player directly, independent of room membership (e.g. the word
+// game and its economy payouts, neither of which are room-scoped).
+func (h *hub) registerPlayer(playerID string, conn *safeConn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.playerConns[playerID] = conn
+}
+
+func (h *hub) unregisterPlayer(playerID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.playerConns, playerID)
+}
+
+// sendToPlayer sends data to whichever connection last registered as
+// playerID (via registerPlayer), regardless of room.
+func (h *hub) sendToPlayer(ctx context.Context, playerID string, data []byte) {
+	h.mu.Lock()
+	c := h.playerConns[playerID]
+	h.mu.Unlock()
+	if c == nil {
+		return
+	}
+
+	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := c.Write(writeCtx, data); err != nil {
+		log.Printf("gateway: send to player %s: %v", playerID, err)
 	}
 }
 

@@ -13,21 +13,26 @@ type Envelope struct {
 }
 
 const (
-	TypeCreateRoom   = "CREATE_ROOM"
-	TypeRoomCreated  = "ROOM_CREATED"
-	TypeJoinRoom     = "JOIN_ROOM"
-	TypeJoined       = "JOINED"
-	TypeMove         = "MOVE"
-	TypePlayerMoved  = "PLAYER_MOVED"
-	TypeChat         = "CHAT"
-	TypeChatMessage  = "CHAT_MESSAGE"
-	TypeChatRejected = "CHAT_REJECTED"
-	TypeStartGame    = "START_GAME"
-	TypeGameStarted  = "GAME_STARTED"
-	TypeGuess        = "GUESS"
-	TypeGuessResult  = "GUESS_RESULT"
-	TypeError        = "ERROR"
+	TypeCreateRoom     = "CREATE_ROOM"
+	TypeRoomCreated    = "ROOM_CREATED"
+	TypeJoinRoom       = "JOIN_ROOM"
+	TypeJoined         = "JOINED"
+	TypeMove           = "MOVE"
+	TypePlayerMoved    = "PLAYER_MOVED"
+	TypeChat           = "CHAT"
+	TypeChatMessage    = "CHAT_MESSAGE"
+	TypeChatRejected   = "CHAT_REJECTED"
+	TypeStartGame      = "START_GAME"
+	TypeGameStarted    = "GAME_STARTED"
+	TypeGuess          = "GUESS"
+	TypeGuessResult    = "GUESS_RESULT"
+	TypeBalanceUpdated = "CURRENCY_BALANCE_UPDATED"
+	TypeError          = "ERROR"
 )
+
+// CurrencyCritterCoins is the (currently only) in-game currency type,
+// per the PRD schema.
+const CurrencyCritterCoins = "CRITTER_COINS"
 
 // JoinRoomRequest is the payload for a JOIN_ROOM message.
 type JoinRoomRequest struct {
@@ -149,4 +154,30 @@ type GameSessionEvent struct {
 	WordLength int      `json:"word_length"`
 	Guesses    []string `json:"guesses"`
 	Status     string   `json:"status"`
+}
+
+// EconomyLedgerEvent is the economy-ledger Kafka message shape, matching
+// the PRD schema exactly (transaction_id, player_id, action, amount,
+// currency_type, verification_hash). VerificationHash is a real
+// HMAC-SHA256 over the other fields (see internal/gateway/economy.go),
+// not a decorative string — the ledger consumer recomputes and checks
+// it before applying anything.
+type EconomyLedgerEvent struct {
+	TransactionID    string `json:"transaction_id"`
+	Timestamp        int64  `json:"timestamp"`
+	PlayerID         string `json:"player_id"`
+	GameSessionID    string `json:"game_session_id,omitempty"`
+	Action           string `json:"action"` // CREDIT, DEBIT
+	Amount           int    `json:"amount"`
+	CurrencyType     string `json:"currency_type"`
+	VerificationHash string `json:"verification_hash"`
+}
+
+// BalanceUpdated is the payload for a CURRENCY_BALANCE_UPDATED push,
+// sent to a player directly (not room-scoped) after their balance
+// changes.
+type BalanceUpdated struct {
+	PlayerID     string `json:"player_id"`
+	Balance      int    `json:"balance"`
+	CurrencyType string `json:"currency_type"`
 }

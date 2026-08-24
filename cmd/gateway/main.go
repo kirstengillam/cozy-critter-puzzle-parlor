@@ -28,6 +28,9 @@ func main() {
 	if err := gw.EnsureTopic(setupCtx, "game-sessions", gateway.GameSessionsPartitions); err != nil {
 		log.Fatalf("gateway: ensure game-sessions topic: %v", err)
 	}
+	if err := gw.EnsureTopic(setupCtx, "economy-ledger", gateway.EconomyLedgerPartitions); err != nil {
+		log.Fatalf("gateway: ensure economy-ledger topic: %v", err)
+	}
 	cancel()
 
 	if err := gw.StartMovementBroadcast(context.Background()); err != nil {
@@ -35,6 +38,9 @@ func main() {
 	}
 	if err := gw.StartChatFilter(context.Background()); err != nil {
 		log.Fatalf("gateway: start chat filter: %v", err)
+	}
+	if err := gw.StartEconomyLedger(context.Background()); err != nil {
+		log.Fatalf("gateway: start economy ledger: %v", err)
 	}
 
 	log.Printf("gateway: listening on %s (kafka brokers: %v)", addr, brokers)

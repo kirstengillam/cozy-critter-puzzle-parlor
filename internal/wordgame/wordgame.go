@@ -18,6 +18,21 @@ const WordLength = 5
 // MaxGuesses is the standard Wordle attempt limit.
 const MaxGuesses = 6
 
+// baseReward is the currency awarded for a win taking the full
+// MaxGuesses attempts; each guess saved below that adds one more
+// baseReward's worth.
+const baseReward = 10
+
+// RewardForWin returns the currency reward for winning in guessesUsed
+// attempts (1..MaxGuesses) — fewer guesses means more reward.
+func RewardForWin(guessesUsed int) int {
+	remaining := MaxGuesses - guessesUsed + 1
+	if remaining < 1 {
+		remaining = 1
+	}
+	return remaining * baseReward
+}
+
 //go:embed data/answers.txt
 var answersRaw string
 

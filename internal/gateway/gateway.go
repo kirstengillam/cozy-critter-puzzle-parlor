@@ -29,20 +29,25 @@ import (
 const topicPlayerPositions = "player-positions"
 const topicChatMessages = "chat-messages"
 const topicGameSessions = "game-sessions"
+const topicEconomyLedger = "economy-ledger"
 
 const PlayerPositionsPartitions = 6
 const ChatMessagesPartitions = 6
 const GameSessionsPartitions = 6
+const EconomyLedgerPartitions = 6
 
 type Gateway struct {
-	brokers           []string
-	allowedOrigins    []string
-	rooms             *room.Registry
-	hub               *hub
-	sessions          *sessionStore
-	moveWriter        *kafka.Writer
-	chatWriter        *kafka.Writer
-	gameSessionWriter *kafka.Writer
+	brokers             []string
+	allowedOrigins      []string
+	rooms               *room.Registry
+	hub                 *hub
+	sessions            *sessionStore
+	economy             *economyStore
+	ledgerSecret        []byte
+	moveWriter          *kafka.Writer
+	chatWriter          *kafka.Writer
+	gameSessionWriter   *kafka.Writer
+	economyLedgerWriter *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -50,12 +55,17 @@ type Gateway struct {
 // WebSocket connection from a browser; a nil/empty slice accepts same-origin
 // requests only.
 func New(brokers []string, allowedOrigins []string) *Gateway {
+	ledgerSecret := make([]byte, 32)
+	_, _ = rand.Read(ledgerSecret)
+
 	return &Gateway{
 		brokers:        brokers,
 		allowedOrigins: allowedOrigins,
 		rooms:          room.NewRegistry(),
 		hub:            newHub(),
 		sessions:       newSessionStore(),
+		economy:        newEconomyStore(),
+		ledgerSecret:   ledgerSecret,
 		moveWriter: &kafka.Writer{
 			Addr:  kafka.TCP(brokers...),
 			Topic: topicPlayerPositions,
@@ -73,6 +83,11 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 			Addr:     kafka.TCP(brokers...),
 			Topic:    topicGameSessions,
 			Balancer: &kafka.Hash{}, // keyed by session id — see produce() call sites
+		},
+		economyLedgerWriter: &kafka.Writer{
+			Addr:     kafka.TCP(brokers...),
+			Topic:    topicEconomyLedger,
+			Balancer: &kafka.Hash{}, // keyed by player id
 		},
 	}
 }
@@ -194,6 +209,51 @@ func (g *Gateway) StartChatFilter(ctx context.Context) error {
 	return nil
 }
 
+// StartEconomyLedger starts one background consumer per partition of
+// economy-ledger. Every entry is verified (see economy.go's
+// signLedgerEvent/verifyLedgerEvent — a real HMAC check, not
+// decorative) before being applied to the in-memory balance store; a
+// failed check is logged and dropped rather than applied. On success,
+// pushes the player's updated balance directly to them (not room-scoped
+// — see hub.sendToPlayer).
+func (g *Gateway) StartEconomyLedger(ctx context.Context) error {
+	for partition := 0; partition < EconomyLedgerPartitions; partition++ {
+		partition := partition
+		err := startPartitionConsumer(ctx, g.brokers, topicEconomyLedger, partition, func(msg kafka.Message) {
+			var evt schema.EconomyLedgerEvent
+			if err := json.Unmarshal(msg.Value, &evt); err != nil {
+				log.Printf("gateway: bad economy-ledger event: %v", err)
+				return
+			}
+			if !verifyLedgerEvent(g.ledgerSecret, evt) {
+				log.Printf("gateway: economy-ledger event %s failed verification, dropping", evt.TransactionID)
+				return
+			}
+
+			balance, err := g.economy.apply(evt.Action, evt.PlayerID, evt.Amount)
+			if err != nil {
+				log.Printf("gateway: apply ledger event %s: %v", evt.TransactionID, err)
+				return
+			}
+
+			data, err := marshalEnvelope(schema.TypeBalanceUpdated, schema.BalanceUpdated{
+				PlayerID:     evt.PlayerID,
+				Balance:      balance,
+				CurrencyType: evt.CurrencyType,
+			})
+			if err != nil {
+				log.Printf("gateway: marshal balance-updated: %v", err)
+				return
+			}
+			g.hub.sendToPlayer(ctx, evt.PlayerID, data)
+		})
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // startPartitionConsumer positions a reader at partition's current end
 // (retrying briefly, since a partition's leader metadata can take a
 // moment to propagate right after CreateTopics) and starts a goroutine
@@ -258,11 +318,17 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn := &safeConn{conn: wsConn}
 	ctx := r.Context()
 
-	// Which room/player this connection has joined, if any.
+	// Which room/player this connection has joined, if any. playerID is
+	// set by either JOIN_ROOM or START_GAME — the word game doesn't
+	// require room membership, so it can be the only one of the two to
+	// ever fire for a given connection.
 	var joinedRoomCode, playerID string
 	defer func() {
 		if joinedRoomCode != "" && playerID != "" {
 			g.hub.leave(joinedRoomCode, playerID)
+		}
+		if playerID != "" {
+			g.hub.unregisterPlayer(playerID)
 		}
 	}()
 
@@ -295,7 +361,9 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 			g.handleChat(ctx, conn, joinedRoomCode, playerID, env.Payload)
 
 		case schema.TypeStartGame:
-			g.handleStartGame(ctx, conn, env.Payload)
+			if id := g.handleStartGame(ctx, conn, env.Payload); id != "" {
+				playerID = id
+			}
 
 		case schema.TypeGuess:
 			g.handleGuess(ctx, conn, env.Payload)
@@ -328,6 +396,7 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, conn *safeConn, payload js
 		return "", "", errors.New("unknown room code")
 	}
 	g.hub.join(req.RoomCode, req.PlayerID, conn)
+	g.hub.registerPlayer(req.PlayerID, conn)
 	g.send(ctx, conn, schema.TypeJoined, schema.Joined{RoomCode: req.RoomCode, PlayerID: req.PlayerID})
 	return req.RoomCode, req.PlayerID, nil
 }
@@ -403,22 +472,27 @@ func (g *Gateway) handleChat(ctx context.Context, conn *safeConn, roomCode, play
 	}
 }
 
-func (g *Gateway) handleStartGame(ctx context.Context, conn *safeConn, payload json.RawMessage) {
+// handleStartGame returns the requesting player's id on success, or ""
+// on any failure — used by handleWS to track this connection's player
+// identity for cleanup, since the word game doesn't require a prior
+// room join.
+func (g *Gateway) handleStartGame(ctx context.Context, conn *safeConn, payload json.RawMessage) string {
 	var req schema.StartGameRequest
 	if err := json.Unmarshal(payload, &req); err != nil || req.PlayerID == "" {
 		g.sendError(ctx, conn, "invalid start_game payload")
-		return
+		return ""
 	}
 
 	target, err := wordgame.RandomAnswer()
 	if err != nil {
 		log.Printf("gateway: pick random answer: %v", err)
 		g.sendError(ctx, conn, "internal error")
-		return
+		return ""
 	}
 
 	sessionID := newEventID()
 	g.sessions.create(sessionID, req.PlayerID, target)
+	g.hub.registerPlayer(req.PlayerID, conn)
 
 	evt := schema.GameSessionEvent{
 		SessionID:  sessionID,
@@ -433,12 +507,12 @@ func (g *Gateway) handleStartGame(ctx context.Context, conn *safeConn, payload j
 	if err != nil {
 		log.Printf("gateway: marshal game-session event: %v", err)
 		g.sendError(ctx, conn, "internal error")
-		return
+		return ""
 	}
 	if err := produce(ctx, g.gameSessionWriter, sessionID, raw); err != nil {
 		log.Printf("gateway: produce game-session event: %v", err)
 		g.sendError(ctx, conn, "could not start game")
-		return
+		return ""
 	}
 
 	g.send(ctx, conn, schema.TypeGameStarted, schema.GameStarted{
@@ -446,6 +520,7 @@ func (g *Gateway) handleStartGame(ctx context.Context, conn *safeConn, payload j
 		WordLength:       wordgame.WordLength,
 		GuessesRemaining: wordgame.MaxGuesses,
 	})
+	return req.PlayerID
 }
 
 func (g *Gateway) handleGuess(ctx context.Context, conn *safeConn, payload json.RawMessage) {
@@ -522,6 +597,10 @@ func (g *Gateway) handleGuess(ctx context.Context, conn *safeConn, payload json.
 		}
 	}
 
+	if status == statusWon {
+		g.creditWordGameWin(ctx, updated.PlayerID, req.SessionID, len(updated.Guesses))
+	}
+
 	letterFeedback := make([]schema.LetterFeedback, len(feedback))
 	for i, st := range feedback {
 		letterFeedback[i] = schema.LetterFeedback{Letter: string(guess[i]), State: string(st)}
@@ -534,6 +613,32 @@ func (g *Gateway) handleGuess(ctx context.Context, conn *safeConn, payload json.
 		GuessesRemaining: wordgame.MaxGuesses - len(updated.Guesses),
 		Status:           updated.Status,
 	})
+}
+
+// creditWordGameWin produces a signed CREDIT event to economy-ledger for
+// a word-game win. The reward and balance update aren't computed here —
+// StartEconomyLedger reacts to this event independently, same as
+// movement/chat's produce-then-consume pattern.
+func (g *Gateway) creditWordGameWin(ctx context.Context, playerID, sessionID string, guessesUsed int) {
+	evt := schema.EconomyLedgerEvent{
+		TransactionID: newEventID(),
+		Timestamp:     time.Now().UnixMilli(),
+		PlayerID:      playerID,
+		GameSessionID: sessionID,
+		Action:        "CREDIT",
+		Amount:        wordgame.RewardForWin(guessesUsed),
+		CurrencyType:  schema.CurrencyCritterCoins,
+	}
+	evt.VerificationHash = signLedgerEvent(g.ledgerSecret, evt)
+
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal economy-ledger event: %v", err)
+		return
+	}
+	if err := produce(ctx, g.economyLedgerWriter, playerID, raw); err != nil {
+		log.Printf("gateway: produce economy-ledger event: %v", err)
+	}
 }
 
 // produce writes a single message keyed by key, retrying briefly on

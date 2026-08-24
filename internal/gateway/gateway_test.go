@@ -511,3 +511,142 @@ func TestWordGameRejectsBadGuesses(t *testing.T) {
 		t.Fatalf("unknown session: got envelope type %q, want %q", env.Type, schema.TypeError)
 	}
 }
+
+func TestWordGameWinCreditsCurrency(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "game-sessions", GameSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.EnsureTopic(ctx, "economy-ledger", EconomyLedgerPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.StartEconomyLedger(ctx); err != nil {
+		t.Fatalf("start economy ledger: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+	defer player.CloseNow()
+
+	sendEnvelope(t, ctx, player, schema.TypeStartGame, schema.StartGameRequest{PlayerID: "wordy-econ"})
+	var started schema.GameStarted
+	if err := json.Unmarshal(readEnvelope(t, ctx, player).Payload, &started); err != nil {
+		t.Fatalf("unmarshal GameStarted: %v", err)
+	}
+	sess, ok := gw.sessions.get(started.SessionID)
+	if !ok {
+		t.Fatalf("session %q not found in store", started.SessionID)
+	}
+	target := sess.Target
+
+	// Win in 3 guesses: two wrong, then the target.
+	for i := 0; i < 2; i++ {
+		wrong := differentAnswer(t, target)
+		sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: wrong})
+		readEnvelope(t, ctx, player) // discard the GUESS_RESULT
+	}
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: target})
+
+	winEnv := readEnvelope(t, ctx, player)
+	var winResult schema.GuessResult
+	if err := json.Unmarshal(winEnv.Payload, &winResult); err != nil {
+		t.Fatalf("unmarshal GuessResult: %v", err)
+	}
+	if winResult.Status != "WON" {
+		t.Fatalf("status = %q, want WON", winResult.Status)
+	}
+
+	// The balance update arrives asynchronously (produce -> economy
+	// consumer -> push), so it's the next message, not necessarily
+	// bundled with the GUESS_RESULT above.
+	balEnv := readEnvelope(t, ctx, player)
+	if balEnv.Type != schema.TypeBalanceUpdated {
+		t.Fatalf("got envelope type %q, want %q", balEnv.Type, schema.TypeBalanceUpdated)
+	}
+	var bal schema.BalanceUpdated
+	if err := json.Unmarshal(balEnv.Payload, &bal); err != nil {
+		t.Fatalf("unmarshal BalanceUpdated: %v", err)
+	}
+	if bal.PlayerID != "wordy-econ" {
+		t.Fatalf("player_id = %q, want wordy-econ", bal.PlayerID)
+	}
+	wantReward := wordgame.RewardForWin(3)
+	if bal.Balance != wantReward {
+		t.Fatalf("balance = %d, want %d (reward for winning in 3 guesses)", bal.Balance, wantReward)
+	}
+	if bal.CurrencyType != schema.CurrencyCritterCoins {
+		t.Fatalf("currency_type = %q, want %q", bal.CurrencyType, schema.CurrencyCritterCoins)
+	}
+}
+
+func TestWordGameLossDoesNotCreditCurrency(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "game-sessions", GameSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.EnsureTopic(ctx, "economy-ledger", EconomyLedgerPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.StartEconomyLedger(ctx); err != nil {
+		t.Fatalf("start economy ledger: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+	defer player.CloseNow()
+
+	sendEnvelope(t, ctx, player, schema.TypeStartGame, schema.StartGameRequest{PlayerID: "wordy-loser"})
+	var started schema.GameStarted
+	if err := json.Unmarshal(readEnvelope(t, ctx, player).Payload, &started); err != nil {
+		t.Fatalf("unmarshal GameStarted: %v", err)
+	}
+	sess, ok := gw.sessions.get(started.SessionID)
+	if !ok {
+		t.Fatalf("session %q not found in store", started.SessionID)
+	}
+	target := sess.Target
+
+	var lastResult schema.GuessResult
+	for i := 0; i < wordgame.MaxGuesses; i++ {
+		wrong := differentAnswer(t, target)
+		sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: wrong})
+		env := readEnvelope(t, ctx, player)
+		if err := json.Unmarshal(env.Payload, &lastResult); err != nil {
+			t.Fatalf("unmarshal GuessResult (attempt %d): %v", i, err)
+		}
+	}
+	if lastResult.Status != "LOST" {
+		t.Fatalf("status after %d wrong guesses = %q, want LOST", wordgame.MaxGuesses, lastResult.Status)
+	}
+
+	// Nothing else should arrive — specifically no CURRENCY_BALANCE_UPDATED.
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer shortCancel()
+	if _, _, err := player.Read(shortCtx); err == nil {
+		t.Fatal("expected no further message after a loss, but got one")
+	}
+}

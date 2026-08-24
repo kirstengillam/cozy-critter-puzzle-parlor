@@ -60,6 +60,23 @@ func TestEvaluateDuplicateLetters(t *testing.T) {
 	}
 }
 
+func TestRewardForWinDecreasesWithMoreGuesses(t *testing.T) {
+	if got := RewardForWin(1); got != MaxGuesses*baseReward {
+		t.Errorf("RewardForWin(1) = %d, want %d", got, MaxGuesses*baseReward)
+	}
+	if got := RewardForWin(MaxGuesses); got != baseReward {
+		t.Errorf("RewardForWin(%d) = %d, want %d", MaxGuesses, got, baseReward)
+	}
+	prev := RewardForWin(1)
+	for g := 2; g <= MaxGuesses; g++ {
+		cur := RewardForWin(g)
+		if cur >= prev {
+			t.Fatalf("RewardForWin(%d) = %d is not less than RewardForWin(%d) = %d", g, cur, g-1, prev)
+		}
+		prev = cur
+	}
+}
+
 func TestEvaluateOveraccountingDoesNotDoubleCountPresent(t *testing.T) {
 	// target "melon" has one 'l'. Guessing "lilly" (four l's): only the
 	// single target 'l' should ever be claimed as PRESENT/CORRECT once;
