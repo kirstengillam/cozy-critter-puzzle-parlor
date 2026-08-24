@@ -116,12 +116,21 @@ func (g *Gateway) StartMovementBroadcast(ctx context.Context) error {
 }
 
 func (g *Gateway) startPartitionBroadcaster(ctx context.Context, partition int) error {
-	leader, err := kafka.DialLeader(ctx, "tcp", g.brokers[0], topicPlayerPositions, partition)
-	if err != nil {
+	// Right after CreateTopics, a partition's leader metadata can take a
+	// moment to propagate — DialLeader/ReadLastOffset can transiently fail
+	// with "Not Leader For Partition" even on a single broker. Retry briefly
+	// rather than fail startup over a race that clears itself in well under
+	// a second.
+	var startOffset int64
+	err := retry(ctx, 10, 200*time.Millisecond, func() error {
+		leader, err := kafka.DialLeader(ctx, "tcp", g.brokers[0], topicPlayerPositions, partition)
+		if err != nil {
+			return err
+		}
+		defer leader.Close()
+		startOffset, err = leader.ReadLastOffset()
 		return err
-	}
-	startOffset, err := leader.ReadLastOffset()
-	leader.Close()
+	})
 	if err != nil {
 		return err
 	}
@@ -316,4 +325,21 @@ func newEventID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// retry calls fn until it succeeds, ctx is done, or attempts is exhausted,
+// waiting delay between tries.
+func retry(ctx context.Context, attempts int, delay time.Duration, fn func() error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
 }

@@ -3,11 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <title>Cozy Critter Puzzle Parlor</title>
+  <style>
+    body { font-family: sans-serif; background: #1c1c26; color: #eee; }
+    #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+    #game { display: none; }
+    #status { font-size: 0.9rem; color: #aaa; }
+  </style>
 </head>
 <body>
+  <div id="lobby">
+    <button id="create-room">Create Room</button>
+    <input id="room-code-input" placeholder="room code" maxlength="6" />
+    <button id="join-room">Join Room</button>
+  </div>
+  <p id="status"></p>
   <div id="game"></div>
-  <button id="send-test">Send test message</button>
   <script src="vendor/phaser.min.js"></script>
-  <script src="main.js"></script>
+  <script type="module" src="main.js"></script>
 </body>
 </html>
