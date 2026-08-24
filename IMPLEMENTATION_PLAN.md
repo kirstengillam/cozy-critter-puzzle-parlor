@@ -8,9 +8,8 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
   stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
-- **Milestone 2 (Room Sync):** 2.1–2.8 done (private code-joined rooms; movement produce/broadcast
-  backend; lobby UI + Phaser grid room + click-to-move rendering). Chat (2.9+) and k8s parity (2.14+)
-  are next.
+- **Milestone 2 (Room Sync):** 2.1–2.13 done (private code-joined rooms; movement; stub-filtered chat).
+  Kubernetes parity (2.14–2.18) is next.
 - **Milestones 3–4:** not started.
 
 ## Locked-in decisions
@@ -46,6 +45,10 @@ decided steps we're actually building against. Update this file as decisions cha
   is actually built — not built now, but decided so it isn't re-litigated later. The event *schemas* for
   currency and inventory should already look like the real (Postgres-backed, double-entry) thing even
   while the storage backend is an in-memory map — only the storage layer is the deferred part.
+- **Kafka writers retry transient produce errors** (`produce` helper in `internal/gateway/gateway.go`).
+  Right after `EnsureTopic` creates a topic, a connection's cached metadata can be stale for a moment
+  even on a single broker, causing an immediate produce to fail with "Unknown Topic Or Partition" — this
+  is the producer-side counterpart to the consumer-side race fixed in 2.6.
 - **No sprite/background art style decided yet.** Use simple placeholder shapes (colored circles/
   rectangles, maybe a label) for critters and rooms in the meantime. Load sprites from a small config/
   manifest (critter type → texture key) rather than hardcoding shapes inline in scene code, so that
@@ -128,16 +131,20 @@ can chat, with messages passing through a (stub) filter.
     check with two real browser windows side by side if you want to see it live yourself.
 
 **Chat (stub pipeline)**
-2.9 Define `chat-messages` payload as Go structs (mirrors PRD schema), create the topic.
-2.10 On a `CHAT` message from a joined client: produce to `chat-messages` with `status:
+2.9 ✅ Define `chat-messages` payload as Go structs (mirrors PRD schema), create the topic (6 partitions,
+    same key-by-room-code pattern as `player-positions`).
+2.10 ✅ On a `CHAT` message from a joined client: produce to `chat-messages` with `status:
      PENDING_VALIDATION`.
-2.11 Stub filter consumer: consumes `chat-messages`, checks against a small hardcoded wordlist, marks
-     `APPROVED` or `REJECTED`, and for `APPROVED` messages triggers the same broadcast path as movement
-     (scoped to the message's `room_id`).
-2.12 Frontend: minimal chat log overlay in the room scene; sending a message and seeing it (or a
-     same-tab echo of a rejected one) appear.
-2.13 Two-tab manual test: chat from Tab A appears in Tab B; a wordlist-flagged message is visibly
-     rejected.
+2.11 ✅ Stub filter consumer: consumes `chat-messages`, checks against a small hardcoded wordlist, marks
+     `APPROVED` or `REJECTED`. `APPROVED` broadcasts to the room; `REJECTED` goes back only to the
+     sender (new `hub.sendTo`), not the whole room. The direct-partition-reader setup from 2.6 was
+     factored into a shared `startPartitionConsumer` since both movement and chat need it now.
+2.12 ✅ Frontend: chat log + input alongside the room view; approved messages render normally, rejected
+     ones render inline in a visibly distinct style rather than vanishing silently.
+2.13 ✅ Two-tab manual test: chat from Tab A appears in Tab B; a wordlist-flagged message is visibly
+     rejected. Verified via `TestChatApprovedBroadcastsAndRejectedStaysPrivate` (both parties see an
+     approved broadcast, only the sender sees a rejection) plus a manual pass against the real binary.
+     Also found and fixed a real produce-side race (see "Locked-in decisions" below).
 
 **Kubernetes parity**
 2.14 Containerize the gateway (`Dockerfile`).
