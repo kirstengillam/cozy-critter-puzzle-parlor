@@ -329,6 +329,31 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn := &safeConn{conn: wsConn}
 	ctx := r.Context()
 
+	// Cloudflare (sitting in front of the production deployment) drops
+	// WebSocket connections after ~100s of no data, which a quiet stretch
+	// of puzzle-solving with no chat/movement can easily exceed. Ping on a
+	// shorter interval to keep the connection alive through any idle proxy.
+	pingCtx, cancelPing := context.WithCancel(ctx)
+	defer cancelPing()
+	go func() {
+		ticker := time.NewTicker(25 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingCtx.Done():
+				return
+			case <-ticker.C:
+				pingReqCtx, cancel := context.WithTimeout(pingCtx, 10*time.Second)
+				err := wsConn.Ping(pingReqCtx)
+				cancel()
+				if err != nil {
+					wsConn.Close(websocket.StatusGoingAway, "ping failed")
+					return
+				}
+			}
+		}
+	}()
+
 	// Which room/player this connection has joined, if any. playerID is
 	// set by either JOIN_ROOM or START_GAME — the word game doesn't
 	// require room membership, so it can be the only one of the two to

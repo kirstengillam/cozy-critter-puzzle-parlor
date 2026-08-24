@@ -34,8 +34,11 @@ data "aws_ami" "al2023" {
   owners      = ["amazon"]
 
   filter {
+    # "al2023-ami-2*" (not "al2023-ami-*") deliberately excludes the
+    # ECS-optimized variant (al2023-ami-ecs-hvm-*), which ships with an
+    # ecs-agent container that crash-loops with no ECS cluster to join.
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2*-x86_64"]
   }
   filter {
     name   = "architecture"
