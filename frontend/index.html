@@ -8,11 +8,37 @@
     #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
     #room { display: none; }
     #status { font-size: 0.9rem; color: #aaa; }
+    #balance { font-size: 0.9rem; color: #e8a33d; }
     #chat { max-width: 480px; margin-top: 0.5rem; }
     #chat-log { height: 120px; overflow-y: auto; background: #14141c; padding: 0.4rem; font-size: 0.85rem; }
     #chat-log p { margin: 0 0 0.2rem 0; }
     #chat-log p.rejected { color: #d98a8a; font-style: italic; }
     #chat-input { width: 360px; }
+
+    #wordgame { display: none; margin-top: 1rem; }
+    #word-grid { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.75rem; }
+    .word-row { display: flex; gap: 4px; }
+    .tile {
+      width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+      font-size: 1.2rem; font-weight: bold; text-transform: uppercase;
+      background: #14141c; border: 1px solid #44445a;
+    }
+    .tile.correct { background: #4a7a4a; border-color: #4a7a4a; }
+    .tile.present { background: #b8a23a; border-color: #b8a23a; }
+    .tile.absent { background: #33333f; border-color: #33333f; }
+
+    #keyboard { display: flex; flex-direction: column; gap: 4px; }
+    .kb-row { display: flex; gap: 4px; }
+    .kb-key {
+      min-width: 28px; padding: 6px 4px; font-size: 0.8rem; text-transform: uppercase;
+      background: #33333f; color: #eee; border: none; cursor: pointer;
+    }
+    .kb-key.wide { min-width: 48px; }
+    .kb-key.correct { background: #4a7a4a; }
+    .kb-key.present { background: #b8a23a; }
+    .kb-key.absent { background: #222229; color: #777; }
+
+    #wordgame-status { margin-top: 0.5rem; font-size: 0.9rem; }
   </style>
 </head>
 <body>
@@ -20,8 +46,10 @@
     <button id="create-room">Create Room</button>
     <input id="room-code-input" placeholder="room code" maxlength="6" />
     <button id="join-room">Join Room</button>
+    <button id="play-word-game">Play Word Game</button>
   </div>
   <p id="status"></p>
+  <p id="balance">Critter Coins: <span id="balance-amount">0</span></p>
   <div id="room">
     <div id="game"></div>
     <div id="chat">
@@ -29,6 +57,12 @@
       <input id="chat-input" placeholder="say something..." maxlength="200" />
       <button id="chat-send">Send</button>
     </div>
+  </div>
+  <div id="wordgame">
+    <div id="word-grid"></div>
+    <div id="keyboard"></div>
+    <p id="wordgame-status"></p>
+    <button id="new-game">New Game</button>
   </div>
   <script src="vendor/phaser.min.js"></script>
   <script type="module" src="main.js"></script>
