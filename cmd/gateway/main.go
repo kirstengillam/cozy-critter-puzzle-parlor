@@ -25,6 +25,9 @@ func main() {
 	if err := gw.EnsureTopic(setupCtx, "chat-messages", gateway.ChatMessagesPartitions); err != nil {
 		log.Fatalf("gateway: ensure chat-messages topic: %v", err)
 	}
+	if err := gw.EnsureTopic(setupCtx, "game-sessions", gateway.GameSessionsPartitions); err != nil {
+		log.Fatalf("gateway: ensure game-sessions topic: %v", err)
+	}
 	cancel()
 
 	if err := gw.StartMovementBroadcast(context.Background()); err != nil {

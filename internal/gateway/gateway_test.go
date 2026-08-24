@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"cozy-critter-puzzle-parlor/internal/schema"
+	"cozy-critter-puzzle-parlor/internal/wordgame"
 )
 
 // dial opens a WebSocket connection to srv. Callers provide their own
@@ -296,4 +297,217 @@ func TestChatApprovedBroadcastsAndRejectedStaysPrivate(t *testing.T) {
 	// next thing the listener sees.
 	sendEnvelope(t, ctx, speaker, schema.TypeChat, schema.ChatRequest{Text: "sorry, ignore that"})
 	checkApproved("listener (after rejection)", "sorry, ignore that", readEnvelope(t, ctx, listener))
+}
+
+// differentAnswer returns a random answer guaranteed not to equal avoid.
+func differentAnswer(t *testing.T, avoid string) string {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		w, err := wordgame.RandomAnswer()
+		if err != nil {
+			t.Fatalf("RandomAnswer: %v", err)
+		}
+		if w != avoid {
+			return w
+		}
+	}
+	t.Fatal("could not find an answer different from avoid after 50 tries")
+	return ""
+}
+
+func TestWordGameStartAndWin(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "game-sessions", GameSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+	defer player.CloseNow()
+
+	sendEnvelope(t, ctx, player, schema.TypeStartGame, schema.StartGameRequest{PlayerID: "wordy"})
+	startEnv := readEnvelope(t, ctx, player)
+	if startEnv.Type != schema.TypeGameStarted {
+		t.Fatalf("got envelope type %q, want %q", startEnv.Type, schema.TypeGameStarted)
+	}
+	var started schema.GameStarted
+	if err := json.Unmarshal(startEnv.Payload, &started); err != nil {
+		t.Fatalf("unmarshal GameStarted: %v", err)
+	}
+	if started.SessionID == "" {
+		t.Fatal("GameStarted.SessionID is empty")
+	}
+	if started.WordLength != wordgame.WordLength {
+		t.Fatalf("WordLength = %d, want %d", started.WordLength, wordgame.WordLength)
+	}
+	if started.GuessesRemaining != wordgame.MaxGuesses {
+		t.Fatalf("GuessesRemaining = %d, want %d", started.GuessesRemaining, wordgame.MaxGuesses)
+	}
+
+	// White-box peek at the session's target — the protocol deliberately
+	// never reveals it to a real client, but the test needs it to guess
+	// correctly on the first try.
+	sess, ok := gw.sessions.get(started.SessionID)
+	if !ok {
+		t.Fatalf("session %q not found in store", started.SessionID)
+	}
+	target := sess.Target
+
+	// A wrong guess first (a real word, guaranteed not the target),
+	// exercising per-letter feedback and IN_PROGRESS status.
+	wrong := differentAnswer(t, target)
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: wrong})
+	wrongEnv := readEnvelope(t, ctx, player)
+	if wrongEnv.Type != schema.TypeGuessResult {
+		t.Fatalf("got envelope type %q, want %q", wrongEnv.Type, schema.TypeGuessResult)
+	}
+	var wrongResult schema.GuessResult
+	if err := json.Unmarshal(wrongEnv.Payload, &wrongResult); err != nil {
+		t.Fatalf("unmarshal GuessResult: %v", err)
+	}
+	if wrongResult.Status != "IN_PROGRESS" {
+		t.Fatalf("status after wrong guess = %q, want IN_PROGRESS", wrongResult.Status)
+	}
+	if wrongResult.GuessesRemaining != wordgame.MaxGuesses-1 {
+		t.Fatalf("guesses remaining = %d, want %d", wrongResult.GuessesRemaining, wordgame.MaxGuesses-1)
+	}
+	allCorrect := true
+	for _, f := range wrongResult.Feedback {
+		if f.State != "CORRECT" {
+			allCorrect = false
+		}
+	}
+	if allCorrect {
+		t.Fatalf("wrong guess %q reported all CORRECT against target %q", wrong, target)
+	}
+
+	// Now the winning guess.
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: target})
+	winEnv := readEnvelope(t, ctx, player)
+	var winResult schema.GuessResult
+	if err := json.Unmarshal(winEnv.Payload, &winResult); err != nil {
+		t.Fatalf("unmarshal GuessResult: %v", err)
+	}
+	if winResult.Status != "WON" {
+		t.Fatalf("status after correct guess = %q, want WON", winResult.Status)
+	}
+	for _, f := range winResult.Feedback {
+		if f.State != "CORRECT" {
+			t.Fatalf("winning guess feedback has non-CORRECT letter: %+v", winResult.Feedback)
+		}
+	}
+
+	// The session is over: one more guess should be rejected.
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: target})
+	afterWinEnv := readEnvelope(t, ctx, player)
+	if afterWinEnv.Type != schema.TypeError {
+		t.Fatalf("guessing after a win: got envelope type %q, want %q", afterWinEnv.Type, schema.TypeError)
+	}
+}
+
+func TestWordGameLossAfterMaxGuesses(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "game-sessions", GameSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+	defer player.CloseNow()
+
+	sendEnvelope(t, ctx, player, schema.TypeStartGame, schema.StartGameRequest{PlayerID: "wordy"})
+	var started schema.GameStarted
+	if err := json.Unmarshal(readEnvelope(t, ctx, player).Payload, &started); err != nil {
+		t.Fatalf("unmarshal GameStarted: %v", err)
+	}
+	sess, ok := gw.sessions.get(started.SessionID)
+	if !ok {
+		t.Fatalf("session %q not found in store", started.SessionID)
+	}
+	target := sess.Target
+
+	var lastResult schema.GuessResult
+	for i := 0; i < wordgame.MaxGuesses; i++ {
+		wrong := differentAnswer(t, target)
+		sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: wrong})
+		env := readEnvelope(t, ctx, player)
+		if err := json.Unmarshal(env.Payload, &lastResult); err != nil {
+			t.Fatalf("unmarshal GuessResult (attempt %d): %v", i, err)
+		}
+	}
+
+	if lastResult.Status != "LOST" {
+		t.Fatalf("status after %d wrong guesses = %q, want LOST", wordgame.MaxGuesses, lastResult.Status)
+	}
+	if lastResult.GuessesRemaining != 0 {
+		t.Fatalf("guesses remaining after loss = %d, want 0", lastResult.GuessesRemaining)
+	}
+}
+
+func TestWordGameRejectsBadGuesses(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "game-sessions", GameSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+	defer player.CloseNow()
+
+	sendEnvelope(t, ctx, player, schema.TypeStartGame, schema.StartGameRequest{PlayerID: "wordy"})
+	var started schema.GameStarted
+	if err := json.Unmarshal(readEnvelope(t, ctx, player).Payload, &started); err != nil {
+		t.Fatalf("unmarshal GameStarted: %v", err)
+	}
+
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: "hi"})
+	if env := readEnvelope(t, ctx, player); env.Type != schema.TypeError {
+		t.Fatalf("too-short guess: got envelope type %q, want %q", env.Type, schema.TypeError)
+	}
+
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: started.SessionID, Guess: "zzzzz"})
+	if env := readEnvelope(t, ctx, player); env.Type != schema.TypeError {
+		t.Fatalf("not-a-word guess: got envelope type %q, want %q", env.Type, schema.TypeError)
+	}
+
+	sendEnvelope(t, ctx, player, schema.TypeGuess, schema.GuessRequest{SessionID: "not-a-real-session", Guess: "crane"})
+	if env := readEnvelope(t, ctx, player); env.Type != schema.TypeError {
+		t.Fatalf("unknown session: got envelope type %q, want %q", env.Type, schema.TypeError)
+	}
 }

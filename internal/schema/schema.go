@@ -22,6 +22,10 @@ const (
 	TypeChat         = "CHAT"
 	TypeChatMessage  = "CHAT_MESSAGE"
 	TypeChatRejected = "CHAT_REJECTED"
+	TypeStartGame    = "START_GAME"
+	TypeGameStarted  = "GAME_STARTED"
+	TypeGuess        = "GUESS"
+	TypeGuessResult  = "GUESS_RESULT"
 	TypeError        = "ERROR"
 )
 
@@ -90,4 +94,59 @@ type ChatMessageEvent struct {
 	RoomID    string `json:"room_id"`
 	RawText   string `json:"raw_text"`
 	Status    string `json:"status"`
+}
+
+// StartGameRequest is the payload a client sends to start a word-game
+// session. The word game is single-player and not room-scoped, so the
+// client supplies its player_id directly rather than relying on prior
+// room membership.
+type StartGameRequest struct {
+	PlayerID string `json:"player_id"`
+}
+
+// GameStarted is the payload for a GAME_STARTED response. The target
+// word is never sent to the client.
+type GameStarted struct {
+	SessionID        string `json:"session_id"`
+	WordLength       int    `json:"word_length"`
+	GuessesRemaining int    `json:"guesses_remaining"`
+}
+
+// GuessRequest is the payload a client sends to submit a guess.
+type GuessRequest struct {
+	SessionID string `json:"session_id"`
+	Guess     string `json:"guess"`
+}
+
+// LetterFeedback is the per-letter result of a guess (wordgame.LetterState
+// values: CORRECT, PRESENT, or ABSENT).
+type LetterFeedback struct {
+	Letter string `json:"letter"`
+	State  string `json:"state"`
+}
+
+// GuessResult is the payload for a GUESS_RESULT response.
+type GuessResult struct {
+	SessionID        string           `json:"session_id"`
+	Guess            string           `json:"guess"`
+	Feedback         []LetterFeedback `json:"feedback"`
+	GuessesRemaining int              `json:"guesses_remaining"`
+	Status           string           `json:"status"` // IN_PROGRESS, WON, LOST
+}
+
+// GameSessionEvent is the game-sessions Kafka message shape (per the PRD
+// schema: session_id, player_id, word length, guesses, status). It's an
+// audit-log stream, not consumed for broadcast — GAME_STARTED and
+// GUESS_RESULT go straight back to the requesting connection instead.
+// Action distinguishes SESSION_STARTED, GUESS_EVALUATED, and
+// SESSION_COMPLETED (the latter only produced once, when a guess ends
+// the game).
+type GameSessionEvent struct {
+	SessionID  string   `json:"session_id"`
+	PlayerID   string   `json:"player_id"`
+	Timestamp  int64    `json:"timestamp"`
+	Action     string   `json:"action"`
+	WordLength int      `json:"word_length"`
+	Guesses    []string `json:"guesses"`
+	Status     string   `json:"status"`
 }

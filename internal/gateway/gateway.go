@@ -10,10 +10,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -21,21 +23,26 @@ import (
 
 	"cozy-critter-puzzle-parlor/internal/room"
 	"cozy-critter-puzzle-parlor/internal/schema"
+	"cozy-critter-puzzle-parlor/internal/wordgame"
 )
 
 const topicPlayerPositions = "player-positions"
 const topicChatMessages = "chat-messages"
+const topicGameSessions = "game-sessions"
 
 const PlayerPositionsPartitions = 6
 const ChatMessagesPartitions = 6
+const GameSessionsPartitions = 6
 
 type Gateway struct {
-	brokers        []string
-	allowedOrigins []string
-	rooms          *room.Registry
-	hub            *hub
-	moveWriter     *kafka.Writer
-	chatWriter     *kafka.Writer
+	brokers           []string
+	allowedOrigins    []string
+	rooms             *room.Registry
+	hub               *hub
+	sessions          *sessionStore
+	moveWriter        *kafka.Writer
+	chatWriter        *kafka.Writer
+	gameSessionWriter *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -48,6 +55,7 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 		allowedOrigins: allowedOrigins,
 		rooms:          room.NewRegistry(),
 		hub:            newHub(),
+		sessions:       newSessionStore(),
 		moveWriter: &kafka.Writer{
 			Addr:  kafka.TCP(brokers...),
 			Topic: topicPlayerPositions,
@@ -60,6 +68,11 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 			Addr:     kafka.TCP(brokers...),
 			Topic:    topicChatMessages,
 			Balancer: &kafka.Hash{},
+		},
+		gameSessionWriter: &kafka.Writer{
+			Addr:     kafka.TCP(brokers...),
+			Topic:    topicGameSessions,
+			Balancer: &kafka.Hash{}, // keyed by session id — see produce() call sites
 		},
 	}
 }
@@ -190,7 +203,7 @@ func (g *Gateway) StartChatFilter(ctx context.Context) error {
 // for why this avoids a consumer group.
 func startPartitionConsumer(ctx context.Context, brokers []string, topic string, partition int, handle func(kafka.Message)) error {
 	var startOffset int64
-	err := retry(ctx, 10, 200*time.Millisecond, func() error {
+	err := retry(ctx, 25, 300*time.Millisecond, func() error {
 		leader, err := kafka.DialLeader(ctx, "tcp", brokers[0], topic, partition)
 		if err != nil {
 			return err
@@ -280,6 +293,12 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case schema.TypeChat:
 			g.handleChat(ctx, conn, joinedRoomCode, playerID, env.Payload)
+
+		case schema.TypeStartGame:
+			g.handleStartGame(ctx, conn, env.Payload)
+
+		case schema.TypeGuess:
+			g.handleGuess(ctx, conn, env.Payload)
 
 		default:
 			g.sendError(ctx, conn, "unknown message type: "+env.Type)
@@ -384,16 +403,149 @@ func (g *Gateway) handleChat(ctx context.Context, conn *safeConn, roomCode, play
 	}
 }
 
-// produce writes a single message keyed by roomCode, retrying briefly on
+func (g *Gateway) handleStartGame(ctx context.Context, conn *safeConn, payload json.RawMessage) {
+	var req schema.StartGameRequest
+	if err := json.Unmarshal(payload, &req); err != nil || req.PlayerID == "" {
+		g.sendError(ctx, conn, "invalid start_game payload")
+		return
+	}
+
+	target, err := wordgame.RandomAnswer()
+	if err != nil {
+		log.Printf("gateway: pick random answer: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+
+	sessionID := newEventID()
+	g.sessions.create(sessionID, req.PlayerID, target)
+
+	evt := schema.GameSessionEvent{
+		SessionID:  sessionID,
+		PlayerID:   req.PlayerID,
+		Timestamp:  time.Now().UnixMilli(),
+		Action:     "SESSION_STARTED",
+		WordLength: wordgame.WordLength,
+		Guesses:    []string{},
+		Status:     statusInProgress,
+	}
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal game-session event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+	if err := produce(ctx, g.gameSessionWriter, sessionID, raw); err != nil {
+		log.Printf("gateway: produce game-session event: %v", err)
+		g.sendError(ctx, conn, "could not start game")
+		return
+	}
+
+	g.send(ctx, conn, schema.TypeGameStarted, schema.GameStarted{
+		SessionID:        sessionID,
+		WordLength:       wordgame.WordLength,
+		GuessesRemaining: wordgame.MaxGuesses,
+	})
+}
+
+func (g *Gateway) handleGuess(ctx context.Context, conn *safeConn, payload json.RawMessage) {
+	var req schema.GuessRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		g.sendError(ctx, conn, "invalid guess payload")
+		return
+	}
+
+	sess, ok := g.sessions.get(req.SessionID)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+	if sess.Status != statusInProgress {
+		g.sendError(ctx, conn, "game session already finished")
+		return
+	}
+
+	guess := strings.ToLower(strings.TrimSpace(req.Guess))
+	if len(guess) != wordgame.WordLength {
+		g.sendError(ctx, conn, fmt.Sprintf("guess must be %d letters", wordgame.WordLength))
+		return
+	}
+	if !wordgame.IsValidGuess(guess) {
+		g.sendError(ctx, conn, "not a recognized word")
+		return
+	}
+
+	feedback := wordgame.Evaluate(guess, sess.Target)
+
+	status := statusInProgress
+	switch {
+	case guess == sess.Target:
+		status = statusWon
+	case len(sess.Guesses)+1 >= wordgame.MaxGuesses:
+		status = statusLost
+	}
+
+	updated, ok := g.sessions.recordGuess(req.SessionID, guess, status)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+
+	guessEvt := schema.GameSessionEvent{
+		SessionID:  req.SessionID,
+		PlayerID:   updated.PlayerID,
+		Timestamp:  time.Now().UnixMilli(),
+		Action:     "GUESS_EVALUATED",
+		WordLength: wordgame.WordLength,
+		Guesses:    updated.Guesses,
+		Status:     updated.Status,
+	}
+	raw, err := json.Marshal(guessEvt)
+	if err != nil {
+		log.Printf("gateway: marshal game-session event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+	if err := produce(ctx, g.gameSessionWriter, req.SessionID, raw); err != nil {
+		log.Printf("gateway: produce game-session event: %v", err)
+		g.sendError(ctx, conn, "could not process guess")
+		return
+	}
+
+	if status != statusInProgress {
+		completedEvt := guessEvt
+		completedEvt.Action = "SESSION_COMPLETED"
+		if raw, err := json.Marshal(completedEvt); err != nil {
+			log.Printf("gateway: marshal session-completed event: %v", err)
+		} else if err := produce(ctx, g.gameSessionWriter, req.SessionID, raw); err != nil {
+			log.Printf("gateway: produce session-completed event: %v", err)
+		}
+	}
+
+	letterFeedback := make([]schema.LetterFeedback, len(feedback))
+	for i, st := range feedback {
+		letterFeedback[i] = schema.LetterFeedback{Letter: string(guess[i]), State: string(st)}
+	}
+
+	g.send(ctx, conn, schema.TypeGuessResult, schema.GuessResult{
+		SessionID:        req.SessionID,
+		Guess:            guess,
+		Feedback:         letterFeedback,
+		GuessesRemaining: wordgame.MaxGuesses - len(updated.Guesses),
+		Status:           updated.Status,
+	})
+}
+
+// produce writes a single message keyed by key, retrying briefly on
 // transient errors like "Unknown Topic Or Partition" — the producer-side
 // counterpart to startPartitionConsumer's retry: right after EnsureTopic
 // creates a topic, a connection's cached metadata can be stale for a
 // moment even on a single broker.
-func produce(ctx context.Context, writer *kafka.Writer, roomCode string, value []byte) error {
-	return retry(ctx, 10, 200*time.Millisecond, func() error {
+func produce(ctx context.Context, writer *kafka.Writer, key string, value []byte) error {
+	return retry(ctx, 25, 300*time.Millisecond, func() error {
 		writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		return writer.WriteMessages(writeCtx, kafka.Message{Key: []byte(roomCode), Value: value})
+		return writer.WriteMessages(writeCtx, kafka.Message{Key: []byte(key), Value: value})
 	})
 }
 
