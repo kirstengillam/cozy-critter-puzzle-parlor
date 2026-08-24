@@ -1,10 +1,20 @@
-import { CRITTER_MANIFEST, registerCritterTextures } from "./critters.js";
+import {
+  DEFAULT_CRITTER,
+  animKey,
+  createCritterSprite,
+  preloadCritterTextures,
+  registerCritterAnimations,
+} from "./critters.js";
 
 const WS_PORT = 8080;
 const GRID_SIZE = 32;
 const GRID_COLS = 15;
 const GRID_ROWS = 8;
 const MOVE_TWEEN_MS = 200;
+
+// Native cat sprites are 64x64; scale them down to fit a 32px grid cell.
+const CRITTER_SCALE = 0.5;
+const LABEL_OFFSET = 16;
 
 // Where the in-room word-game table sits. Walking onto this cell starts
 // a game — see the pointerdown handler and onPlayerMoved's arrival check.
@@ -100,21 +110,33 @@ function onPlayerMoved(evt) {
   let entry = sprites[evt.player_id];
   if (!entry) {
     const start = cellCenter(evt.current_x, evt.current_y);
-    const image = scene.add.image(start.x, start.y, CRITTER_MANIFEST.default.textureKey);
+    const image = createCritterSprite(scene, DEFAULT_CRITTER, start.x, start.y);
+    image.setScale(CRITTER_SCALE);
     const name = evt.player_id === playerId ? displayName : evt.player_id.replace(/^player_/, "");
     const label = scene.add
-      .text(start.x, start.y + GRID_SIZE / 2 - 4, name, { fontSize: "9px", color: "#ffffff" })
+      .text(start.x, start.y + LABEL_OFFSET, name, { fontSize: "9px", color: "#ffffff" })
       .setOrigin(0.5, 0);
     entry = { image, label };
     sprites[evt.player_id] = entry;
   }
 
   const target = cellCenter(evt.target_x, evt.target_y);
-  scene.tweens.add({ targets: entry.image, x: target.x, y: target.y, duration: MOVE_TWEEN_MS });
+  if (target.x !== entry.image.x) {
+    // Sheet faces left by default; flip to face the direction of travel.
+    entry.image.setFlipX(target.x > entry.image.x);
+  }
+  entry.image.play(animKey(DEFAULT_CRITTER, "walking"), true);
+  scene.tweens.add({
+    targets: entry.image,
+    x: target.x,
+    y: target.y,
+    duration: MOVE_TWEEN_MS,
+    onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "idle"), true),
+  });
   scene.tweens.add({
     targets: entry.label,
     x: target.x,
-    y: target.y + GRID_SIZE / 2 - 4,
+    y: target.y + LABEL_OFFSET,
     duration: MOVE_TWEEN_MS,
   });
 
@@ -323,10 +345,14 @@ new Phaser.Game({
   height: GRID_ROWS * GRID_SIZE,
   parent: "game",
   backgroundColor: "#2d2d3a",
+  pixelArt: true, // crisp nearest-neighbor scaling for the pixel-art sprites
   scene: {
+    preload: function () {
+      preloadCritterTextures(this);
+    },
     create: function () {
       scene = this;
-      registerCritterTextures(this);
+      registerCritterAnimations(this);
       drawFloor(this);
       drawGrid(this);
       drawGameTable(this);
