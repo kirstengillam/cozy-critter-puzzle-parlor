@@ -1,0 +1,8 @@
+frontend/
+deploy/
+.git/
+.idea/
+IMPLEMENTATION_PLAN.md
+cozy_critter_context.md
+GAME-BRAINSTORM.md
+CLAUDE.md
