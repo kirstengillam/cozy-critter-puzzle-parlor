@@ -12,9 +12,11 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 3 (Word Game & Economy): done (3.1–3.10).** Word list, session lifecycle, guess
   evaluation, ephemeral economy with a real HMAC-verified ledger, and the frontend UI all built and
   verified — including a full manual playthrough to a win with the correct reward credited.
-- **Between Milestone 3 and 4 — UI polish pass (not a numbered step):** checkerboard placeholder floor
-  texture, per-player name labels on avatars, and an in-world game table (a clickable map tile) as a
-  second way to start the word game, alongside the existing lobby button. See "Locked-in decisions."
+- **Between Milestone 3 and 4 — UI polish pass (not a numbered step):** per-player name labels on
+  avatars; real purchased pixel-art cat sprites (animated idle/walking) replacing placeholder circles,
+  yellow color only for now; a placeholder room background image with 3 in-world game tables (clickable
+  map tiles) as a second way to start the word game, alongside the existing lobby button. See
+  "Locked-in decisions."
 - **Milestone 4:** not started.
 
 ## Locked-in decisions
@@ -60,19 +62,34 @@ decided steps we're actually building against. Update this file as decisions cha
   originally-linked Kaggle dataset (which requires a login to download). Same underlying data, widely
   re-hosted across the open-source Wordle-clone ecosystem. 2315 answers / 12972 total allowed guesses,
   embedded via `go:embed` in `internal/wordgame/data/`.
-- **No sprite/background art style decided yet.** Use simple placeholder shapes (colored circles/
-  rectangles, maybe a label) for critters and rooms in the meantime. Load sprites from a small config/
-  manifest (critter type → texture key) rather than hardcoding shapes inline in scene code, so that
-  real art (commissioned from a friend, or a self-made early pass) is a data/asset swap later, not a
-  rendering-logic rewrite. Relevant starting at Milestone 2 step 2.7. The room floor is now a checkerboard
-  placeholder (`drawFloor` in `frontend/main.js`) rather than a flat rectangle — same "placeholder, still
-  swappable" spirit, just less bare.
-- **Word game has two entry points: the lobby button and an in-world game table.** A fixed map tile
-  (`GAME_TABLE_CELL` in `frontend/main.js`, currently (12, 1)) that a player walks onto (a normal
-  click-to-move) to trigger `START_GAME` on arrival — matches the PRD's "game tables" framing. Kept
-  alongside the standalone lobby button rather than replacing it, for ease of testing; may remove the
-  button later. The word game still doesn't require room membership either way (per the earlier
-  decision) — the table is just a second, in-world trigger for the same room-independent game.
+- **Critter sprites: real purchased pixel art, yellow color only for now.** Bought "8BIT Pixel Cats" by
+  14 Collective (itch.io; license preserved at
+  `frontend/assets/pixel-cats/LICENSE-14collective.txt`) — free/commercial use, modification allowed, no
+  repackaging/reselling, credit optional. Of the 5 purchased colors, only yellow has a complete, cleanly
+  N×64-gridded spritesheet for every action we picked (idle, walking, running, sitting, loaf, licking,
+  jumping — dropped "digging"/"playing"/combat-related ones as not needed, and "playing" has no clean
+  yellow spritesheet either, only a low-quality gif); the other 4 colors are mostly single reference
+  poses, not usable animation strips yet. Sprite/animation manifest lives in `frontend/critters.js`
+  (`CRITTER_MANIFEST`, generic preload/animation-registration code) — adding another color later is just
+  another manifest entry, no rendering-logic changes needed. Rendered via Phaser's `pixelArt: true` for
+  crisp nearest-neighbor scaling; native 64x64 frames scaled to `CRITTER_SCALE = 0.5` to fit the 32px
+  grid.
+- **Room background: a placeholder image (`frontend/assets/backgrounds/room-temp.png`) with 3 painted
+  tables**, replacing the earlier procedural checkerboard floor. Native art is 256x144; displayed at
+  `BACKGROUND_SCALE = 2` (512x288) to exactly fill the `GRID_COLS x GRID_ROWS` canvas (16x9 at
+  `GRID_SIZE = 32`) without needing to retune the critter sprite scale above. Table screen positions were
+  derived by flood-filling the source image for its table-colored pixel blobs (a Python/PIL script) to
+  get each table's centroid, then converting to grid cells.
+- **Word game has multiple entry points: the lobby button and 3 in-world game tables.** `GAME_TABLES` in
+  `frontend/main.js` is an array of `{id, cell, gameType}` (not a single hardcoded cell) — walking onto
+  any table's cell (a normal click-to-move) triggers `startGameAtTable`, matching the PRD's "game
+  tables" framing. Every table's `gameType` is `"word"` today since only one mini-game exists;
+  `startGameAtTable` is the single place to branch once more games are added, so adding a second game
+  later is a matter of giving a table a different `gameType` and a branch there, not restructuring the
+  movement/arrival plumbing. Kept alongside the standalone lobby button rather than replacing it, for
+  ease of testing; may remove the button later. The word game still doesn't require room membership
+  either way (per the earlier decision) — the tables are just additional, in-world triggers for the same
+  room-independent game.
 
 ## Open / deferred (not blocking the next milestones)
 

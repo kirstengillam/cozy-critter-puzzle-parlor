@@ -8,17 +8,39 @@ import {
 
 const WS_PORT = 8080;
 const GRID_SIZE = 32;
-const GRID_COLS = 15;
-const GRID_ROWS = 8;
+const GRID_COLS = 16;
+const GRID_ROWS = 9;
 const MOVE_TWEEN_MS = 200;
 
 // Native cat sprites are 64x64; scale them down to fit a 32px grid cell.
 const CRITTER_SCALE = 0.5;
 const LABEL_OFFSET = 16;
 
-// Where the in-room word-game table sits. Walking onto this cell starts
-// a game — see the pointerdown handler and onPlayerMoved's arrival check.
-const GAME_TABLE_CELL = { x: 12, y: 1 };
+// Room background art is a 256x144 placeholder; scaling it 2x fills the
+// GRID_COLS x GRID_ROWS canvas exactly (16*32 x 9*32 = 512x288) without
+// touching the critter sprite scale tuned above.
+const BACKGROUND_SCALE = 2;
+
+// Each visual table in the background art is a spot players can walk onto
+// to start a game. Cell coords were derived from the background image's
+// table blob centroids, scaled by BACKGROUND_SCALE. gameType lets future
+// tables launch something other than the word game without touching the
+// movement/arrival plumbing below.
+const GAME_TABLES = [
+  { id: "table-a", cell: { x: 8, y: 2 }, gameType: "word" },
+  { id: "table-b", cell: { x: 3, y: 4 }, gameType: "word" },
+  { id: "table-c", cell: { x: 10, y: 4 }, gameType: "word" },
+];
+
+function findTableAt(x, y) {
+  return GAME_TABLES.find((t) => t.cell.x === x && t.cell.y === y) ?? null;
+}
+
+// Only the word game exists today, so every table starts it the same way.
+// Once more games exist, branch on table.gameType here.
+function startGameAtTable(table) {
+  send("START_GAME", { player_id: playerId });
+}
 
 const playerId = "player_" + Math.random().toString(36).slice(2, 8);
 const displayName = playerId.replace(/^player_/, "");
@@ -26,7 +48,7 @@ const displayName = playerId.replace(/^player_/, "");
 let socket;
 let roomCode = null;
 let scene = null;
-let pendingGameStartOnArrival = false;
+let pendingGameTable = null;
 const sprites = {}; // player_id -> { image: Phaser.GameObjects.Image, label: Phaser.GameObjects.Text }
 
 const statusEl = document.getElementById("status");
@@ -142,12 +164,13 @@ function onPlayerMoved(evt) {
 
   if (
     evt.player_id === playerId &&
-    pendingGameStartOnArrival &&
-    evt.target_x === GAME_TABLE_CELL.x &&
-    evt.target_y === GAME_TABLE_CELL.y
+    pendingGameTable &&
+    evt.target_x === pendingGameTable.cell.x &&
+    evt.target_y === pendingGameTable.cell.y
   ) {
-    pendingGameStartOnArrival = false;
-    send("START_GAME", { player_id: playerId });
+    const table = pendingGameTable;
+    pendingGameTable = null;
+    startGameAtTable(table);
   }
 }
 
@@ -276,40 +299,22 @@ function onGuessResult(payload) {
   }
 }
 
-// Simple placeholder floor: a two-tone checker so the room reads as a
-// "place" rather than a bare rectangle. Swap for real tile art later
-// without touching anything else — see IMPLEMENTATION_PLAN.md's
-// "no sprite/background art style decided yet" note.
-function drawFloor(scene) {
-  const g = scene.add.graphics();
-  for (let x = 0; x < GRID_COLS; x++) {
-    for (let y = 0; y < GRID_ROWS; y++) {
-      g.fillStyle((x + y) % 2 === 0 ? 0x2a2a38 : 0x2d2d3d, 1);
-      g.fillRect(x * GRID_SIZE, y * GRID_SIZE, GRID_SIZE, GRID_SIZE);
-    }
-  }
+// Temp placeholder room background (see IMPLEMENTATION_PLAN.md's
+// "no sprite/background art style decided yet" note) — its 3 painted
+// tables are the walkable GAME_TABLES cells above.
+function drawBackground(scene) {
+  scene.add.image(0, 0, "room-bg").setOrigin(0, 0).setScale(BACKGROUND_SCALE);
 }
 
 function drawGrid(scene) {
   const g = scene.add.graphics();
-  g.lineStyle(1, 0x44445a, 1);
+  g.lineStyle(1, 0xffffff, 0.15);
   for (let x = 0; x <= GRID_COLS; x++) {
     g.lineBetween(x * GRID_SIZE, 0, x * GRID_SIZE, GRID_ROWS * GRID_SIZE);
   }
   for (let y = 0; y <= GRID_ROWS; y++) {
     g.lineBetween(0, y * GRID_SIZE, GRID_COLS * GRID_SIZE, y * GRID_SIZE);
   }
-}
-
-// The word-game table: a visibly distinct tile players can walk onto to
-// start a game, alongside the standalone "Play Word Game" lobby button
-// (both stay available for now — see IMPLEMENTATION_PLAN.md).
-function drawGameTable(scene) {
-  const center = cellCenter(GAME_TABLE_CELL.x, GAME_TABLE_CELL.y);
-  const g = scene.add.graphics();
-  g.fillStyle(0x8a5a2f, 1);
-  g.fillRoundedRect(center.x - GRID_SIZE / 2 + 3, center.y - GRID_SIZE / 2 + 3, GRID_SIZE - 6, GRID_SIZE - 6, 6);
-  scene.add.text(center.x, center.y, "🧩", { fontSize: "16px" }).setOrigin(0.5);
 }
 
 document.getElementById("create-room").addEventListener("click", () => send("CREATE_ROOM", {}));
@@ -348,14 +353,14 @@ new Phaser.Game({
   pixelArt: true, // crisp nearest-neighbor scaling for the pixel-art sprites
   scene: {
     preload: function () {
+      this.load.image("room-bg", "assets/backgrounds/room-temp.png");
       preloadCritterTextures(this);
     },
     create: function () {
       scene = this;
       registerCritterAnimations(this);
-      drawFloor(this);
+      drawBackground(this);
       drawGrid(this);
-      drawGameTable(this);
       this.input.on("pointerdown", (pointer) => {
         if (!roomCode) return;
         // pointer.x/y go through Phaser's scale-manager transform, which
@@ -366,9 +371,8 @@ new Phaser.Game({
         const offsetY = pointer.event?.offsetY ?? pointer.y;
         const targetX = Math.floor(offsetX / GRID_SIZE);
         const targetY = Math.floor(offsetY / GRID_SIZE);
-        if (targetX === GAME_TABLE_CELL.x && targetY === GAME_TABLE_CELL.y) {
-          pendingGameStartOnArrival = true;
-        }
+        const table = findTableAt(targetX, targetY);
+        if (table) pendingGameTable = table;
         send("MOVE", { target_x: targetX, target_y: targetY, facing_direction: "NORTH" });
       });
     },
