@@ -56,17 +56,19 @@ const BACKGROUND_SCALE = 2;
 const GAME_TABLES = [
   { id: "table-a", cell: { x: 8, y: 2 }, gameType: "word" },
   { id: "table-b", cell: { x: 3, y: 4 }, gameType: "word" },
-  { id: "table-c", cell: { x: 10, y: 4 }, gameType: "word" },
+  { id: "table-c", cell: { x: 10, y: 4 }, gameType: "connections" },
 ];
 
 function findTableAt(x, y) {
   return GAME_TABLES.find((t) => t.cell.x === x && t.cell.y === y) ?? null;
 }
 
-// Only the word game exists today, so every table starts it the same way.
-// Once more games exist, branch on table.gameType here.
 function startGameAtTable(table) {
-  send("START_GAME", { player_id: playerId });
+  if (table.gameType === "connections") {
+    send("START_CONNECTIONS", { player_id: playerId });
+  } else {
+    send("START_GAME", { player_id: playerId });
+  }
 }
 
 const playerId = "player_" + Math.random().toString(36).slice(2, 8);
@@ -98,6 +100,13 @@ const wordgameEl = document.getElementById("wordgame");
 const wordGridEl = document.getElementById("word-grid");
 const keyboardEl = document.getElementById("keyboard");
 const wordgameStatusEl = document.getElementById("wordgame-status");
+
+const connectionsEl = document.getElementById("connections");
+const connGridEl = document.getElementById("conn-grid");
+const connSolvedEl = document.getElementById("conn-solved");
+const connMistakesEl = document.getElementById("conn-mistakes");
+const connSubmitEl = document.getElementById("conn-submit");
+const connectionsStatusEl = document.getElementById("connections-status");
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -142,6 +151,12 @@ function handleMessage(event) {
       break;
     case "GUESS_RESULT":
       onGuessResult(env.payload);
+      break;
+    case "CONNECTIONS_STARTED":
+      onConnectionsStarted(env.payload);
+      break;
+    case "CONNECTIONS_RESULT":
+      onConnectionsResult(env.payload);
       break;
     case "CURRENCY_BALANCE_UPDATED":
       balanceAmountEl.textContent = env.payload.balance;
@@ -399,6 +414,109 @@ function onGuessResult(payload) {
   }
 }
 
+let connectionsSessionId = null;
+let connectionsSelected = []; // currently-selected words, max 4
+
+function buildConnectionsGrid(words) {
+  connGridEl.innerHTML = "";
+  for (const word of words) {
+    const tile = document.createElement("button");
+    tile.className = "conn-tile";
+    tile.textContent = word;
+    tile.dataset.word = word;
+    tile.addEventListener("click", () => toggleConnectionsTile(word));
+    connGridEl.appendChild(tile);
+  }
+}
+
+function toggleConnectionsTile(word) {
+  const idx = connectionsSelected.indexOf(word);
+  if (idx !== -1) {
+    connectionsSelected.splice(idx, 1);
+  } else if (connectionsSelected.length < 4) {
+    connectionsSelected.push(word);
+  }
+  renderConnectionsSelection();
+}
+
+function renderConnectionsSelection() {
+  for (const tile of connGridEl.children) {
+    tile.classList.toggle("selected", connectionsSelected.includes(tile.dataset.word));
+  }
+  connSubmitEl.disabled = connectionsSelected.length !== 4;
+}
+
+function renderConnectionsMistakes(mistakesUsed, maxMistakes) {
+  connMistakesEl.textContent = "Mistakes remaining: ";
+  for (let i = 0; i < maxMistakes; i++) {
+    const dot = document.createElement("span");
+    dot.className = "conn-dot" + (i < mistakesUsed ? " used" : "");
+    connMistakesEl.appendChild(dot);
+  }
+}
+
+function renderConnectionsSolved(solvedGroups) {
+  connSolvedEl.innerHTML = "";
+  for (const g of solvedGroups) {
+    const row = document.createElement("div");
+    row.className = `conn-solved-row conn-level-${g.level}`;
+    const name = document.createElement("span");
+    name.className = "conn-solved-name";
+    name.textContent = g.name;
+    const members = document.createElement("span");
+    members.className = "conn-solved-members";
+    members.textContent = g.members.join(", ");
+    row.append(name, members);
+    connSolvedEl.appendChild(row);
+  }
+}
+
+function onConnectionsStarted(payload) {
+  connectionsSessionId = payload.session_id;
+  connectionsSelected = [];
+  connectionsStatusEl.textContent = "";
+  renderConnectionsSolved([]);
+  buildConnectionsGrid(payload.words);
+  renderConnectionsMistakes(0, payload.max_mistakes);
+  renderConnectionsSelection();
+  connectionsEl.style.display = "block";
+}
+
+function submitConnectionsGuess() {
+  if (!connectionsSessionId || connectionsSelected.length !== 4) return;
+  send("CONNECTIONS_GUESS", { session_id: connectionsSessionId, members: connectionsSelected });
+}
+
+function onConnectionsResult(payload) {
+  renderConnectionsMistakes(payload.mistakes_used, payload.max_mistakes);
+  renderConnectionsSolved(payload.solved_groups);
+  connectionsStatusEl.textContent = "";
+
+  if (payload.correct && payload.solved_group) {
+    for (const word of payload.solved_group.members) {
+      connGridEl.querySelector(`[data-word="${CSS.escape(word)}"]`)?.remove();
+    }
+  } else {
+    for (const word of connectionsSelected) {
+      const tile = connGridEl.querySelector(`[data-word="${CSS.escape(word)}"]`);
+      if (!tile) continue;
+      tile.classList.add("shake");
+      setTimeout(() => tile.classList.remove("shake"), 300);
+    }
+    if (payload.one_away) connectionsStatusEl.textContent = "One away...";
+  }
+  connectionsSelected = [];
+  renderConnectionsSelection();
+
+  if (payload.status === "WON") {
+    connectionsStatusEl.textContent = "Solved it! 🎉";
+    connectionsSessionId = null;
+  } else if (payload.status === "LOST") {
+    connectionsStatusEl.textContent = "Out of guesses — better luck next time.";
+    connectionsSessionId = null;
+  }
+}
+
 // Temp placeholder room background (see IMPLEMENTATION_PLAN.md's
 // "no sprite/background art style decided yet" note) — its 3 painted
 // tables are the walkable GAME_TABLES cells above.
@@ -441,6 +559,14 @@ document.getElementById("play-word-game").addEventListener("click", () => {
 document.getElementById("new-game").addEventListener("click", () => {
   send("START_GAME", { player_id: playerId });
 });
+
+document.getElementById("play-connections").addEventListener("click", () => {
+  send("START_CONNECTIONS", { player_id: playerId });
+});
+document.getElementById("new-connections").addEventListener("click", () => {
+  send("START_CONNECTIONS", { player_id: playerId });
+});
+connSubmitEl.addEventListener("click", submitConnectionsGuess);
 
 connect();
 

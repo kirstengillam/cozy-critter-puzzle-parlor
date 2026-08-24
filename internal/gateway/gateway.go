@@ -21,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/segmentio/kafka-go"
 
+	"cozy-critter-puzzle-parlor/internal/connectionsgame"
 	"cozy-critter-puzzle-parlor/internal/room"
 	"cozy-critter-puzzle-parlor/internal/schema"
 	"cozy-critter-puzzle-parlor/internal/wordgame"
@@ -30,24 +31,28 @@ const topicPlayerPositions = "player-positions"
 const topicChatMessages = "chat-messages"
 const topicGameSessions = "game-sessions"
 const topicEconomyLedger = "economy-ledger"
+const topicConnectionsSessions = "connections-sessions"
 
 const PlayerPositionsPartitions = 6
 const ChatMessagesPartitions = 6
 const GameSessionsPartitions = 6
 const EconomyLedgerPartitions = 6
+const ConnectionsSessionsPartitions = 6
 
 type Gateway struct {
-	brokers             []string
-	allowedOrigins      []string
-	rooms               *room.Registry
-	hub                 *hub
-	sessions            *sessionStore
-	economy             *economyStore
-	ledgerSecret        []byte
-	moveWriter          *kafka.Writer
-	chatWriter          *kafka.Writer
-	gameSessionWriter   *kafka.Writer
-	economyLedgerWriter *kafka.Writer
+	brokers                  []string
+	allowedOrigins           []string
+	rooms                    *room.Registry
+	hub                      *hub
+	sessions                 *sessionStore
+	connectionsSessions      *connectionsSessionStore
+	economy                  *economyStore
+	ledgerSecret             []byte
+	moveWriter               *kafka.Writer
+	chatWriter               *kafka.Writer
+	gameSessionWriter        *kafka.Writer
+	economyLedgerWriter      *kafka.Writer
+	connectionsSessionWriter *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -59,13 +64,14 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 	_, _ = rand.Read(ledgerSecret)
 
 	return &Gateway{
-		brokers:        brokers,
-		allowedOrigins: allowedOrigins,
-		rooms:          room.NewRegistry(),
-		hub:            newHub(),
-		sessions:       newSessionStore(),
-		economy:        newEconomyStore(),
-		ledgerSecret:   ledgerSecret,
+		brokers:             brokers,
+		allowedOrigins:      allowedOrigins,
+		rooms:               room.NewRegistry(),
+		hub:                 newHub(),
+		sessions:            newSessionStore(),
+		connectionsSessions: newConnectionsSessionStore(),
+		economy:             newEconomyStore(),
+		ledgerSecret:        ledgerSecret,
 		moveWriter: &kafka.Writer{
 			Addr:  kafka.TCP(brokers...),
 			Topic: topicPlayerPositions,
@@ -88,6 +94,11 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 			Addr:     kafka.TCP(brokers...),
 			Topic:    topicEconomyLedger,
 			Balancer: &kafka.Hash{}, // keyed by player id
+		},
+		connectionsSessionWriter: &kafka.Writer{
+			Addr:     kafka.TCP(brokers...),
+			Topic:    topicConnectionsSessions,
+			Balancer: &kafka.Hash{}, // keyed by session id — see produce() call sites
 		},
 	}
 }
@@ -368,6 +379,14 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		case schema.TypeGuess:
 			g.handleGuess(ctx, conn, env.Payload)
 
+		case schema.TypeStartConnections:
+			if id := g.handleStartConnections(ctx, conn, env.Payload); id != "" {
+				playerID = id
+			}
+
+		case schema.TypeConnectionsGuess:
+			g.handleConnectionsGuess(ctx, conn, env.Payload)
+
 		default:
 			g.sendError(ctx, conn, "unknown message type: "+env.Type)
 		}
@@ -630,6 +649,198 @@ func (g *Gateway) creditWordGameWin(ctx context.Context, playerID, sessionID str
 		GameSessionID: sessionID,
 		Action:        "CREDIT",
 		Amount:        wordgame.RewardForWin(guessesUsed),
+		CurrencyType:  schema.CurrencyCritterCoins,
+	}
+	evt.VerificationHash = signLedgerEvent(g.ledgerSecret, evt)
+
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal economy-ledger event: %v", err)
+		return
+	}
+	if err := produce(ctx, g.economyLedgerWriter, playerID, raw); err != nil {
+		log.Printf("gateway: produce economy-ledger event: %v", err)
+	}
+}
+
+// handleStartConnections returns the requesting player's id on success,
+// or "" on any failure — same role as handleStartGame's return value,
+// used by handleWS to track this connection's player identity for
+// cleanup since Connections doesn't require a prior room join either.
+func (g *Gateway) handleStartConnections(ctx context.Context, conn *safeConn, payload json.RawMessage) string {
+	var req schema.StartConnectionsRequest
+	if err := json.Unmarshal(payload, &req); err != nil || req.PlayerID == "" {
+		g.sendError(ctx, conn, "invalid start_connections payload")
+		return ""
+	}
+
+	puzzle, err := connectionsgame.RandomPuzzle()
+	if err != nil {
+		log.Printf("gateway: pick random connections puzzle: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return ""
+	}
+	words, err := connectionsgame.ShuffledWords(puzzle)
+	if err != nil {
+		log.Printf("gateway: shuffle connections words: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return ""
+	}
+
+	sessionID := newEventID()
+	g.connectionsSessions.create(sessionID, req.PlayerID, puzzle)
+	g.hub.registerPlayer(req.PlayerID, conn)
+
+	evt := schema.ConnectionsSessionEvent{
+		SessionID: sessionID,
+		PlayerID:  req.PlayerID,
+		Timestamp: time.Now().UnixMilli(),
+		Action:    "SESSION_STARTED",
+		PuzzleID:  puzzle.ID,
+		Status:    statusInProgress,
+	}
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal connections-session event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return ""
+	}
+	if err := produce(ctx, g.connectionsSessionWriter, sessionID, raw); err != nil {
+		log.Printf("gateway: produce connections-session event: %v", err)
+		g.sendError(ctx, conn, "could not start game")
+		return ""
+	}
+
+	g.send(ctx, conn, schema.TypeConnectionsStarted, schema.ConnectionsStarted{
+		SessionID:   sessionID,
+		Words:       words,
+		MaxMistakes: connectionsgame.MaxMistakes,
+	})
+	return req.PlayerID
+}
+
+func (g *Gateway) handleConnectionsGuess(ctx context.Context, conn *safeConn, payload json.RawMessage) {
+	var req schema.ConnectionsGuessRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		g.sendError(ctx, conn, "invalid connections_guess payload")
+		return
+	}
+
+	sess, ok := g.connectionsSessions.get(req.SessionID)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+	if sess.Status != statusInProgress {
+		g.sendError(ctx, conn, "game session already finished")
+		return
+	}
+	if len(req.Members) != connectionsgame.GroupSize {
+		g.sendError(ctx, conn, fmt.Sprintf("guess must have %d words", connectionsgame.GroupSize))
+		return
+	}
+	for _, m := range req.Members {
+		if !connectionsgame.IsValidWord(m, sess.Puzzle) {
+			g.sendError(ctx, conn, "guess contains a word not in this puzzle")
+			return
+		}
+	}
+
+	groupIndex, oneAway := connectionsgame.EvaluateGuess(req.Members, sess.Puzzle)
+	if groupIndex >= 0 && sess.SolvedGroups[groupIndex] {
+		g.sendError(ctx, conn, "group already solved")
+		return
+	}
+
+	status := statusInProgress
+	mistakesUsed := sess.MistakesUsed
+	if groupIndex < 0 {
+		mistakesUsed++
+		if mistakesUsed >= connectionsgame.MaxMistakes {
+			status = statusLost
+		}
+	} else if len(sess.SolvedGroups)+1 >= len(sess.Puzzle.Answers) {
+		status = statusWon
+	}
+
+	updated, ok := g.connectionsSessions.recordGuess(req.SessionID, groupIndex, status)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+
+	guessEvt := schema.ConnectionsSessionEvent{
+		SessionID:    req.SessionID,
+		PlayerID:     updated.PlayerID,
+		Timestamp:    time.Now().UnixMilli(),
+		Action:       "GUESS_EVALUATED",
+		PuzzleID:     updated.Puzzle.ID,
+		MistakesUsed: updated.MistakesUsed,
+		Status:       updated.Status,
+	}
+	raw, err := json.Marshal(guessEvt)
+	if err != nil {
+		log.Printf("gateway: marshal connections-session event: %v", err)
+		g.sendError(ctx, conn, "internal error")
+		return
+	}
+	if err := produce(ctx, g.connectionsSessionWriter, req.SessionID, raw); err != nil {
+		log.Printf("gateway: produce connections-session event: %v", err)
+		g.sendError(ctx, conn, "could not process guess")
+		return
+	}
+
+	if status != statusInProgress {
+		completedEvt := guessEvt
+		completedEvt.Action = "SESSION_COMPLETED"
+		if raw, err := json.Marshal(completedEvt); err != nil {
+			log.Printf("gateway: marshal session-completed event: %v", err)
+		} else if err := produce(ctx, g.connectionsSessionWriter, req.SessionID, raw); err != nil {
+			log.Printf("gateway: produce session-completed event: %v", err)
+		}
+	}
+
+	if status == statusWon {
+		g.creditConnectionsWin(ctx, updated.PlayerID, req.SessionID, updated.MistakesUsed)
+	}
+
+	var solvedGroup *schema.ConnectionsSolvedGroup
+	solvedGroups := make([]schema.ConnectionsSolvedGroup, 0, len(updated.SolvedGroups))
+	for idx := range updated.Puzzle.Answers {
+		if !updated.SolvedGroups[idx] {
+			continue
+		}
+		grp := updated.Puzzle.Answers[idx]
+		sg := schema.ConnectionsSolvedGroup{Level: grp.Level, Name: grp.Name, Members: grp.Members}
+		solvedGroups = append(solvedGroups, sg)
+		if idx == groupIndex {
+			solvedGroup = &sg
+		}
+	}
+
+	g.send(ctx, conn, schema.TypeConnectionsResult, schema.ConnectionsResult{
+		SessionID:    req.SessionID,
+		Correct:      groupIndex >= 0,
+		OneAway:      oneAway,
+		SolvedGroup:  solvedGroup,
+		SolvedGroups: solvedGroups,
+		MistakesUsed: updated.MistakesUsed,
+		MaxMistakes:  connectionsgame.MaxMistakes,
+		Status:       updated.Status,
+	})
+}
+
+// creditConnectionsWin produces a signed CREDIT event to economy-ledger
+// for a Connections win — same produce-then-consume pattern as
+// creditWordGameWin.
+func (g *Gateway) creditConnectionsWin(ctx context.Context, playerID, sessionID string, mistakesUsed int) {
+	evt := schema.EconomyLedgerEvent{
+		TransactionID: newEventID(),
+		Timestamp:     time.Now().UnixMilli(),
+		PlayerID:      playerID,
+		GameSessionID: sessionID,
+		Action:        "CREDIT",
+		Amount:        connectionsgame.RewardForWin(mistakesUsed),
 		CurrencyType:  schema.CurrencyCritterCoins,
 	}
 	evt.VerificationHash = signLedgerEvent(g.ledgerSecret, evt)

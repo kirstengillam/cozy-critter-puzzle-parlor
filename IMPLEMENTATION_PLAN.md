@@ -15,8 +15,13 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Between Milestone 3 and 4 — UI polish pass (not a numbered step):** per-player name labels on
   avatars; real purchased pixel-art cat sprites (animated idle/walking) replacing placeholder circles,
   yellow color only for now; a placeholder room background image with 3 in-world game tables (clickable
-  map tiles) as a second way to start the word game, alongside the existing lobby button. See
-  "Locked-in decisions."
+  map tiles) as a way to start a game, alongside each game's lobby button. See "Locked-in decisions."
+- **Second mini-game (not a numbered milestone step): NYT Connections-style grouping game, done.**
+  Full backend (package, schema, gateway handlers, session store, Kafka audit topic, economy credit) and
+  frontend (tile grid, mistake tracking, solved-group reveal) built and verified — integration tests for
+  start/win, loss, bad-guess rejection, and currency credit all pass against a live Kafka, plus a manual
+  browser playthrough via both the lobby button and the in-world table. See "Locked-in decisions" for
+  the data-source call.
 - **Milestone 4:** not started.
 
 ## Locked-in decisions
@@ -80,16 +85,33 @@ decided steps we're actually building against. Update this file as decisions cha
   `GRID_SIZE = 32`) without needing to retune the critter sprite scale above. Table screen positions were
   derived by flood-filling the source image for its table-colored pixel blobs (a Python/PIL script) to
   get each table's centroid, then converting to grid cells.
-- **Word game has multiple entry points: the lobby button and 3 in-world game tables.** `GAME_TABLES` in
-  `frontend/main.js` is an array of `{id, cell, gameType}` (not a single hardcoded cell) — walking onto
-  any table's cell (a normal click-to-move) triggers `startGameAtTable`, matching the PRD's "game
-  tables" framing. Every table's `gameType` is `"word"` today since only one mini-game exists;
-  `startGameAtTable` is the single place to branch once more games are added, so adding a second game
-  later is a matter of giving a table a different `gameType` and a branch there, not restructuring the
-  movement/arrival plumbing. Kept alongside the standalone lobby button rather than replacing it, for
-  ease of testing; may remove the button later. The word game still doesn't require room membership
-  either way (per the earlier decision) — the tables are just additional, in-world triggers for the same
-  room-independent game.
+- **Each mini-game has multiple entry points: a lobby button and an in-world game table.** `GAME_TABLES`
+  in `frontend/main.js` is an array of `{id, cell, gameType}` (not a single hardcoded cell/type) —
+  walking onto any table's cell (a normal click-to-move) triggers `startGameAtTable`, matching the PRD's
+  "game tables" framing; `startGameAtTable` branches on `gameType` so adding another game later is a
+  matter of giving a table a new `gameType` and a branch there, not restructuring the movement/arrival
+  plumbing. Table-a/table-b are `"word"`, table-c is `"connections"` (see below) — both games also keep
+  their standalone lobby button for ease of testing. Neither game requires room membership (per the
+  earlier word-game decision) — tables are just additional, in-world triggers for the same room-
+  independent games.
+- **Second mini-game: an NYT Connections-style grouping game** (sort 16 words into 4 hidden groups of
+  4) — `internal/connectionsgame`, mirroring the word game's plumbing end to end (schema payloads →
+  gateway handlers in `internal/gateway/gateway.go` → session store in
+  `internal/gateway/connections_sessions.go` → `connections-sessions` Kafka audit topic → economy credit
+  → frontend `#connections` panel). 4 mistakes allowed (matching the real game's limit); reward is
+  higher with fewer mistakes, same "fewer attempts = more currency" shape as the word game.
+  - **Puzzle data source: a vendored snapshot of
+    [Eyefyre/NYT-Connections-Answers](https://github.com/Eyefyre/NYT-Connections-Answers)** (a public
+    GitHub JSON archive, 1,165 puzzles as of the snapshot date, embedded via `go:embed` in
+    `internal/connectionsgame/data/puzzles.json` — same "vendored snapshot, not fetched live" approach
+    as the word list). Unlike the word list, this repo has **no declared license**, and Connections'
+    category groupings are NYT's own curated/editorial content (closer to what copyright actually
+    protects than a plain word list is) — a real gray area, explicitly accepted anyway since this is a
+    non-monetized portfolio project, not something being distributed/sold. Revisit if that ever changes.
+  - Newer archive entries lost their `level` (difficulty color) field from NYT's API and use `-1` for
+    all 4 groups on those puzzles — `internal/gateway/connections_sessions.go` tracks solved groups by
+    their **index** in `Puzzle.Answers`, not by `Level`, specifically because `Level` isn't guaranteed
+    unique across a puzzle's 4 groups once `-1` shows up more than once.
 
 ## Open / deferred (not blocking the next milestones)
 

@@ -28,6 +28,11 @@ const (
 	TypeGuessResult    = "GUESS_RESULT"
 	TypeBalanceUpdated = "CURRENCY_BALANCE_UPDATED"
 	TypeError          = "ERROR"
+
+	TypeStartConnections   = "START_CONNECTIONS"
+	TypeConnectionsStarted = "CONNECTIONS_STARTED"
+	TypeConnectionsGuess   = "CONNECTIONS_GUESS"
+	TypeConnectionsResult  = "CONNECTIONS_RESULT"
 )
 
 // CurrencyCritterCoins is the (currently only) in-game currency type,
@@ -183,4 +188,67 @@ type BalanceUpdated struct {
 	PlayerID     string `json:"player_id"`
 	Balance      int    `json:"balance"`
 	CurrencyType string `json:"currency_type"`
+}
+
+// StartConnectionsRequest is the payload a client sends to start a
+// Connections-style grouping session. Like the word game, this is
+// single-player and not room-scoped — the client supplies its player_id
+// directly.
+type StartConnectionsRequest struct {
+	PlayerID string `json:"player_id"`
+}
+
+// ConnectionsStarted is the payload for a CONNECTIONS_STARTED response:
+// all 16 words, shuffled server-side. Group membership is never sent to
+// the client.
+type ConnectionsStarted struct {
+	SessionID   string   `json:"session_id"`
+	Words       []string `json:"words"`
+	MaxMistakes int      `json:"max_mistakes"`
+}
+
+// ConnectionsGuessRequest is the payload a client sends to submit a
+// guessed group — exactly connectionsgame.GroupSize words.
+type ConnectionsGuessRequest struct {
+	SessionID string   `json:"session_id"`
+	Members   []string `json:"members"`
+}
+
+// ConnectionsSolvedGroup is a revealed group, sent once its 4 words have
+// been correctly guessed.
+type ConnectionsSolvedGroup struct {
+	Level   int      `json:"level"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+}
+
+// ConnectionsResult is the payload for a CONNECTIONS_RESULT response.
+// SolvedGroup is set only on a correct guess (this guess's group);
+// SolvedGroups is the cumulative list of every group solved so far, so
+// the client can stay in sync without tracking state itself.
+type ConnectionsResult struct {
+	SessionID    string                   `json:"session_id"`
+	Correct      bool                     `json:"correct"`
+	OneAway      bool                     `json:"one_away"`
+	SolvedGroup  *ConnectionsSolvedGroup  `json:"solved_group,omitempty"`
+	SolvedGroups []ConnectionsSolvedGroup `json:"solved_groups"`
+	MistakesUsed int                      `json:"mistakes_used"`
+	MaxMistakes  int                      `json:"max_mistakes"`
+	Status       string                   `json:"status"` // IN_PROGRESS, WON, LOST
+}
+
+// ConnectionsSessionEvent is the connections-sessions Kafka message shape
+// — an audit-log stream, same role as GameSessionEvent but shaped for
+// the grouping game (no per-guess word list to log, just the running
+// mistake count). Action distinguishes SESSION_STARTED, GUESS_EVALUATED,
+// and SESSION_COMPLETED (the latter only produced once, when a guess
+// ends the game).
+type ConnectionsSessionEvent struct {
+	SessionID    string `json:"session_id"`
+	PlayerID     string `json:"player_id"`
+	Timestamp    int64  `json:"timestamp"`
+	Action       string `json:"action"`
+	PuzzleID     int    `json:"puzzle_id"`
+	MistakesUsed int    `json:"mistakes_used"`
+	Status       string `json:"status"`
 }

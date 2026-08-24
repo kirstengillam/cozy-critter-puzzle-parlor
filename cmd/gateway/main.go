@@ -31,6 +31,9 @@ func main() {
 	if err := gw.EnsureTopic(setupCtx, "economy-ledger", gateway.EconomyLedgerPartitions); err != nil {
 		log.Fatalf("gateway: ensure economy-ledger topic: %v", err)
 	}
+	if err := gw.EnsureTopic(setupCtx, "connections-sessions", gateway.ConnectionsSessionsPartitions); err != nil {
+		log.Fatalf("gateway: ensure connections-sessions topic: %v", err)
+	}
 	cancel()
 
 	if err := gw.StartMovementBroadcast(context.Background()); err != nil {

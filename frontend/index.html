@@ -40,6 +40,38 @@
     .kb-key.absent { background: #222229; color: #777; }
 
     #wordgame-status { margin-top: 0.5rem; font-size: 0.9rem; }
+
+    #connections { display: none; max-width: 320px; }
+    #conn-solved { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+    .conn-solved-row {
+      padding: 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold;
+      text-align: center; color: #14141c;
+    }
+    .conn-solved-row .conn-solved-name { display: block; text-transform: uppercase; }
+    .conn-solved-row .conn-solved-members { font-weight: normal; text-transform: uppercase; }
+    .conn-level-0 { background: #e8d84a; }
+    .conn-level-1 { background: #6fbf6f; }
+    .conn-level-2 { background: #7fa8e0; }
+    .conn-level-3 { background: #b98fd6; }
+    .conn-level--1 { background: #999999; }
+
+    #conn-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 0.75rem; }
+    .conn-tile {
+      padding: 0.6rem 0.2rem; font-size: 0.75rem; font-weight: bold; text-transform: uppercase;
+      background: #14141c; color: #eee; border: 1px solid #44445a; cursor: pointer;
+      text-align: center;
+    }
+    .conn-tile.selected { background: #44445a; border-color: #8888a8; }
+    .conn-tile.shake { animation: conn-shake 0.3s; border-color: #d98a8a; }
+    @keyframes conn-shake {
+      25% { transform: translateX(-4px); } 75% { transform: translateX(4px); }
+    }
+
+    #conn-mistakes { font-size: 0.85rem; margin-bottom: 0.5rem; }
+    .conn-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #44445a; margin-right: 4px; }
+    .conn-dot.used { background: #d98a8a; }
+
+    #connections-status { margin-top: 0.5rem; font-size: 0.9rem; }
   </style>
 </head>
 <body>
@@ -49,6 +81,7 @@
     <input id="room-code-input" placeholder="room code" maxlength="6" />
     <button id="join-room">Join Room</button>
     <button id="play-word-game">Play Word Game</button>
+    <button id="play-connections">Play Connections</button>
   </div>
   <p id="status"></p>
   <p id="balance">Critter Coins: <span id="balance-amount">0</span></p>
@@ -66,6 +99,14 @@
       <div id="keyboard"></div>
       <p id="wordgame-status"></p>
       <button id="new-game">New Game</button>
+    </div>
+    <div id="connections">
+      <div id="conn-solved"></div>
+      <div id="conn-grid"></div>
+      <div id="conn-mistakes"></div>
+      <button id="conn-submit" disabled>Submit Group</button>
+      <p id="connections-status"></p>
+      <button id="new-connections">New Puzzle</button>
     </div>
   </div>
   <script src="vendor/phaser.min.js"></script>
