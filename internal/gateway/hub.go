@@ -38,6 +38,7 @@ type hub struct {
 	conns       map[string]map[string]*safeConn // room code -> player id -> conn
 	position    map[string]map[string]position  // room code -> player id -> last position
 	playerConns map[string]*safeConn            // player id -> conn, independent of room
+	displayName map[string]string               // player id -> chosen display name, independent of room
 }
 
 func newHub() *hub {
@@ -45,7 +46,28 @@ func newHub() *hub {
 		conns:       make(map[string]map[string]*safeConn),
 		position:    make(map[string]map[string]position),
 		playerConns: make(map[string]*safeConn),
+		displayName: make(map[string]string),
 	}
+}
+
+// setDisplayName records the player-chosen name shown above their avatar
+// and in chat, sent with JOIN_ROOM. Independent of room membership, like
+// playerConns, since a player's name shouldn't reset on a room change.
+func (h *hub) setDisplayName(playerID, name string) {
+	if name == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.displayName[playerID] = name
+}
+
+// displayNameFor returns playerID's chosen name, or "" if none was ever
+// set — callers fall back to deriving one from the player id itself.
+func (h *hub) displayNameFor(playerID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.displayName[playerID]
 }
 
 // registerPlayer associates playerID with conn for features that route
@@ -61,6 +83,7 @@ func (h *hub) unregisterPlayer(playerID string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.playerConns, playerID)
+	delete(h.displayName, playerID)
 }
 
 // sendToPlayer sends data to whichever connection last registered as

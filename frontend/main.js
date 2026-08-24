@@ -48,7 +48,7 @@ function startGameAtTable(table) {
 }
 
 const playerId = "player_" + Math.random().toString(36).slice(2, 8);
-const displayName = playerId.replace(/^player_/, "");
+const fallbackDisplayName = playerId.replace(/^player_/, "");
 
 let socket;
 let roomCode = null;
@@ -57,6 +57,16 @@ let pendingGameTable = null;
 const sprites = {}; // player_id -> { image: Phaser.GameObjects.Image, label: Phaser.GameObjects.Text }
 
 const statusEl = document.getElementById("status");
+const displayNameInputEl = document.getElementById("display-name-input");
+displayNameInputEl.value = fallbackDisplayName;
+
+// The name to attach to this player's own JOIN_ROOM/moves/chat: whatever
+// is currently typed in the box, or the auto-generated fallback if it's
+// been cleared.
+function currentDisplayName() {
+  return displayNameInputEl.value.trim() || fallbackDisplayName;
+}
+
 const roomCodeInput = document.getElementById("room-code-input");
 const roomEl = document.getElementById("room");
 const chatLogEl = document.getElementById("chat-log");
@@ -88,18 +98,18 @@ function handleMessage(event) {
   switch (env.type) {
     case "ROOM_CREATED":
       roomCodeInput.value = env.payload.room_code;
-      send("JOIN_ROOM", { player_id: playerId, room_code: env.payload.room_code });
+      send("JOIN_ROOM", { player_id: playerId, room_code: env.payload.room_code, display_name: currentDisplayName() });
       break;
     case "JOINED":
       roomCode = env.payload.room_code;
-      setStatus(`joined room ${roomCode} as ${playerId}`);
+      setStatus(`joined room ${roomCode} as ${currentDisplayName()}`);
       roomEl.style.display = "block";
       break;
     case "PLAYER_MOVED":
       onPlayerMoved(env.payload);
       break;
     case "CHAT_MESSAGE":
-      appendChatLine(`${env.payload.player_id}: ${env.payload.raw_text}`, false);
+      appendChatLine(`${env.payload.display_name || env.payload.player_id}: ${env.payload.raw_text}`, false);
       break;
     case "CHAT_REJECTED":
       appendChatLine(`(your message was rejected: "${env.payload.raw_text}")`, true);
@@ -139,7 +149,7 @@ function onPlayerMoved(evt) {
     const start = cellCenter(evt.current_x, evt.current_y);
     const image = createCritterSprite(scene, DEFAULT_CRITTER, start.x, start.y);
     image.setScale(CRITTER_SCALE);
-    const name = evt.player_id === playerId ? displayName : evt.player_id.replace(/^player_/, "");
+    const name = evt.player_id === playerId ? currentDisplayName() : evt.display_name || evt.player_id.replace(/^player_/, "");
     const label = scene.add
       .text(start.x, start.y + LABEL_OFFSET, name, { fontSize: "9px", color: "#ffffff" })
       .setOrigin(0.5, 0);
@@ -326,7 +336,7 @@ document.getElementById("create-room").addEventListener("click", () => send("CRE
 document.getElementById("join-room").addEventListener("click", () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (!code) return;
-  send("JOIN_ROOM", { player_id: playerId, room_code: code });
+  send("JOIN_ROOM", { player_id: playerId, room_code: code, display_name: currentDisplayName() });
 });
 
 function sendChat() {

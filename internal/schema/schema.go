@@ -36,8 +36,9 @@ const CurrencyCritterCoins = "CRITTER_COINS"
 
 // JoinRoomRequest is the payload for a JOIN_ROOM message.
 type JoinRoomRequest struct {
-	PlayerID string `json:"player_id"`
-	RoomCode string `json:"room_code"`
+	PlayerID    string `json:"player_id"`
+	RoomCode    string `json:"room_code"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // RoomCreated is the payload for a ROOM_CREATED response.
@@ -72,6 +73,7 @@ type PlayerPositionEvent struct {
 	EventID         string `json:"event_id"`
 	Timestamp       int64  `json:"timestamp"`
 	PlayerID        string `json:"player_id"`
+	DisplayName     string `json:"display_name,omitempty"`
 	RoomID          string `json:"room_id"`
 	Action          string `json:"action"`
 	CurrentX        int    `json:"current_x"`
@@ -93,12 +95,13 @@ type ChatRequest struct {
 // APPROVED (broadcast to the room), and REJECTED (sent only to the
 // sender).
 type ChatMessageEvent struct {
-	MessageID string `json:"message_id"`
-	Timestamp int64  `json:"timestamp"`
-	PlayerID  string `json:"player_id"`
-	RoomID    string `json:"room_id"`
-	RawText   string `json:"raw_text"`
-	Status    string `json:"status"`
+	MessageID   string `json:"message_id"`
+	Timestamp   int64  `json:"timestamp"`
+	PlayerID    string `json:"player_id"`
+	DisplayName string `json:"display_name,omitempty"`
+	RoomID      string `json:"room_id"`
+	RawText     string `json:"raw_text"`
+	Status      string `json:"status"`
 }
 
 // StartGameRequest is the payload a client sends to start a word-game

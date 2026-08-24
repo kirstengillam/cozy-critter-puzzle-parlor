@@ -397,6 +397,7 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, conn *safeConn, payload js
 	}
 	g.hub.join(req.RoomCode, req.PlayerID, conn)
 	g.hub.registerPlayer(req.PlayerID, conn)
+	g.hub.setDisplayName(req.PlayerID, req.DisplayName)
 	g.send(ctx, conn, schema.TypeJoined, schema.Joined{RoomCode: req.RoomCode, PlayerID: req.PlayerID})
 	return req.RoomCode, req.PlayerID, nil
 }
@@ -417,6 +418,7 @@ func (g *Gateway) handleMove(ctx context.Context, conn *safeConn, roomCode, play
 		EventID:         newEventID(),
 		Timestamp:       time.Now().UnixMilli(),
 		PlayerID:        playerID,
+		DisplayName:     g.hub.displayNameFor(playerID),
 		RoomID:          roomCode,
 		Action:          "MOVE",
 		CurrentX:        current.X,
@@ -451,12 +453,13 @@ func (g *Gateway) handleChat(ctx context.Context, conn *safeConn, roomCode, play
 	}
 
 	evt := schema.ChatMessageEvent{
-		MessageID: newEventID(),
-		Timestamp: time.Now().UnixMilli(),
-		PlayerID:  playerID,
-		RoomID:    roomCode,
-		RawText:   req.Text,
-		Status:    "PENDING_VALIDATION",
+		MessageID:   newEventID(),
+		Timestamp:   time.Now().UnixMilli(),
+		PlayerID:    playerID,
+		DisplayName: g.hub.displayNameFor(playerID),
+		RoomID:      roomCode,
+		RawText:     req.Text,
+		Status:      "PENDING_VALIDATION",
 	}
 
 	raw, err := json.Marshal(evt)
