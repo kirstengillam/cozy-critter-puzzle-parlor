@@ -13,3 +13,8 @@ dist/
 # Local env/secrets
 .env
 .env.*
+
+# Purchased asset archives — extracted contents live under
+# frontend/assets/; no need to keep the compressed originals in git.
+*.rar
+*.zip
