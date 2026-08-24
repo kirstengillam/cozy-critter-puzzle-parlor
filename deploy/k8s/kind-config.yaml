@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Gateway Service is NodePort 30080; expose it on the host at the
+      # same :8080 the Compose setup used, so the existing frontend
+      # config works unchanged against either stack.
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP

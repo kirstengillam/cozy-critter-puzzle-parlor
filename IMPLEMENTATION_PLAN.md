@@ -8,8 +8,8 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
   stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
-- **Milestone 2 (Room Sync):** 2.1–2.13 done (private code-joined rooms; movement; stub-filtered chat).
-  Kubernetes parity (2.14–2.18) is next.
+- **Milestone 2 (Room Sync): done (2.1–2.18).** Private code-joined rooms, movement, stub-filtered chat,
+  and Kubernetes parity (Strimzi on `kind`, containerized gateway) all verified.
 - **Milestones 3–4:** not started.
 
 ## Locked-in decisions
@@ -147,13 +147,25 @@ can chat, with messages passing through a (stub) filter.
      Also found and fixed a real produce-side race (see "Locked-in decisions" below).
 
 **Kubernetes parity**
-2.14 Containerize the gateway (`Dockerfile`).
-2.15 Stand up a local `kind` cluster.
-2.16 Install Strimzi operator into `kind`; define a `Kafka` custom resource for a single-broker cluster
-     (mirrors the Compose setup, not a production topology).
-2.17 Write k8s manifests (Deployment + Service) for the gateway; point it at the Strimzi-managed broker.
-2.18 Re-run the Milestone 2 two-tab tests (movement + chat) against the `kind`-deployed stack instead
-     of Compose, to confirm parity.
+2.14 ✅ Containerize the gateway (`Dockerfile`): multi-stage, `golang:1.27-alpine` builder producing a
+     static (`CGO_ENABLED=0`) binary, run as non-root on `alpine:3.20`.
+2.15 ✅ Stand up a local `kind` cluster: `deploy/k8s/kind-config.yaml` maps NodePort 30080 to host
+     `:8080`, so the existing frontend config (`ws://localhost:8080/ws`) works unchanged against either
+     stack. `kind create cluster --name cozy-critter --config deploy/k8s/kind-config.yaml`.
+2.16 ✅ Installed the Strimzi operator (bundle install, `kubectl create -f
+     'https://strimzi.io/install/latest?namespace=kafka' -n kafka`) and applied
+     `deploy/k8s/kafka.yaml` — a single dual-role (controller+broker) KRaft node, ephemeral storage,
+     replication factor 1, mirroring the Compose setup's "not a production topology" scope. Strimzi
+     1.2.0 dropped ZooKeeper support entirely (KRaft-only via `KafkaNodePool`), which simplified this
+     versus what the plan originally anticipated.
+2.17 ✅ `deploy/k8s/gateway.yaml`: Deployment (1 replica) + NodePort Service, pointed at
+     `cozy-critter-kafka-bootstrap.kafka.svc.cluster.local:9092`. Built the image, `kind load
+     docker-image cozy-critter-gateway:dev --name cozy-critter` (kind nodes can't see the host's Docker
+     images otherwise), then `kubectl apply -f deploy/k8s/gateway.yaml`.
+2.18 ✅ Re-ran the Milestone 2 checks (create/join, movement broadcast, chat approve + reject) against
+     the `kind`-deployed stack via a throwaway two-client script hitting `localhost:8080` — same results
+     as Compose. Cluster was torn down after (`kind delete cluster --name cozy-critter`) to free
+     resources; recreate with the commands above whenever k8s parity needs re-checking.
 
 ## Milestone 3: Cheat-Proof Word Game & Economy Loop
 
@@ -163,6 +175,9 @@ Goal: a player plays a Wordle-style game entirely validated server-side, and a w
 **Word game**
 3.1 Curate a word list bundled with the backend (a fixed answer list + a broader allowed-guesses list,
     Wordle-style, so players can't be blocked by "not a real word" on legitimate guesses).
+    - use https://www.kaggle.com/datasets/bcruise/wordle-valid-words?select=valid_guesses.csv and 
+      https://www.kaggle.com/datasets/bcruise/wordle-valid-words?select=valid_solutions.csv as sources for
+      valid words and valid guesses
 3.2 Define `game-sessions` payload as Go structs (session_id, player_id, word length, guesses,
     status) in the shared schema package; create the `game-sessions` topic.
 3.3 `START_GAME` message: gateway picks a random target word server-side (never sent to the client),
@@ -174,6 +189,9 @@ Goal: a player plays a Wordle-style game entirely validated server-side, and a w
     is single-player, private to that session).
 3.5 Win/loss detection: on a correct guess or exhausted attempts, mark the session complete and produce
     a session-completed event.
+
+note: other word games and puzzle games will be added later, but starting with wordle-style game first for
+ proof of concept of other features
 
 **Economy (ephemeral)**
 3.6 Define `economy-ledger` payload as Go structs matching the PRD schema (transaction_id, player_id,
