@@ -10,7 +10,9 @@ decided steps we're actually building against. Update this file as decisions cha
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
 - **Milestone 2 (Room Sync): done (2.1–2.18).** Private code-joined rooms, movement, stub-filtered chat,
   and Kubernetes parity (Strimzi on `kind`, containerized gateway) all verified.
-- **Milestones 3–4:** not started.
+- **Milestone 3 (Word Game & Economy):** 3.1–3.5 done (word list, session lifecycle, guess evaluation,
+  win/loss detection). Economy (3.6–3.8), frontend (3.9), and manual test (3.10) are next.
+- **Milestone 4:** not started.
 
 ## Locked-in decisions
 
@@ -45,10 +47,16 @@ decided steps we're actually building against. Update this file as decisions cha
   is actually built — not built now, but decided so it isn't re-litigated later. The event *schemas* for
   currency and inventory should already look like the real (Postgres-backed, double-entry) thing even
   while the storage backend is an in-memory map — only the storage layer is the deferred part.
-- **Kafka writers retry transient produce errors** (`produce` helper in `internal/gateway/gateway.go`).
-  Right after `EnsureTopic` creates a topic, a connection's cached metadata can be stale for a moment
-  even on a single broker, causing an immediate produce to fail with "Unknown Topic Or Partition" — this
-  is the producer-side counterpart to the consumer-side race fixed in 2.6.
+- **Kafka writers and readers retry transient errors** (`produce` / `startPartitionConsumer` in
+  `internal/gateway/gateway.go`, currently 25 attempts × 300ms). Right after `EnsureTopic` creates a
+  topic, a connection's cached metadata can be stale for a moment even on a single broker, causing an
+  immediate produce or partition-leader lookup to fail — worse when several topics are created
+  back-to-back against a freshly started broker (hit this for real in Milestone 3 testing; the original
+  10×200ms budget wasn't always enough).
+- **Word list source: a public GitHub mirror of the original NYT Wordle client's word lists**, not the
+  originally-linked Kaggle dataset (which requires a login to download). Same underlying data, widely
+  re-hosted across the open-source Wordle-clone ecosystem. 2315 answers / 12972 total allowed guesses,
+  embedded via `go:embed` in `internal/wordgame/data/`.
 - **No sprite/background art style decided yet.** Use simple placeholder shapes (colored circles/
   rectangles, maybe a label) for critters and rooms in the meantime. Load sprites from a small config/
   manifest (critter type → texture key) rather than hardcoding shapes inline in scene code, so that
@@ -173,22 +181,32 @@ Goal: a player plays a Wordle-style game entirely validated server-side, and a w
 (ephemeral, in-memory) currency balance — proving the puzzle-to-economy pipeline end to end.
 
 **Word game**
-3.1 Curate a word list bundled with the backend (a fixed answer list + a broader allowed-guesses list,
+3.1 ✅ Curate a word list bundled with the backend (a fixed answer list + a broader allowed-guesses list,
     Wordle-style, so players can't be blocked by "not a real word" on legitimate guesses).
-    - use https://www.kaggle.com/datasets/bcruise/wordle-valid-words?select=valid_guesses.csv and 
-      https://www.kaggle.com/datasets/bcruise/wordle-valid-words?select=valid_solutions.csv as sources for
-      valid words and valid guesses
-3.2 Define `game-sessions` payload as Go structs (session_id, player_id, word length, guesses,
-    status) in the shared schema package; create the `game-sessions` topic.
-3.3 `START_GAME` message: gateway picks a random target word server-side (never sent to the client),
+    - The Kaggle datasets originally linked here require a login to actually download, so instead
+      sourced from a public GitHub mirror of the original NYT Wordle client's word lists (no auth
+      needed) — same underlying data, ubiquitously re-hosted across the open-source Wordle-clone
+      ecosystem. 2315 answers, 12972 total allowed guesses. Embedded via `go:embed` in
+      `internal/wordgame/data/`.
+3.2 ✅ Define `game-sessions` payload as Go structs (session_id, player_id, word length, guesses,
+    status) in the shared schema package; create the `game-sessions` topic. Unlike
+    player-positions/chat-messages, this topic is a pure audit log — no consumer reads it back for
+    broadcast, since GAME_STARTED/GUESS_RESULT go directly to the requesting connection (single-player).
+3.3 ✅ `START_GAME` message: gateway picks a random target word server-side (never sent to the client),
     creates a session, produces a session-started event to `game-sessions`, responds to the client with
-    just `session_id` + guesses-remaining.
-3.4 `GUESS` message: gateway validates the guess is in the allowed-guesses list, computes per-letter
+    just `session_id` + guesses-remaining. Not room-scoped — the client passes `player_id` explicitly
+    rather than relying on prior room membership.
+3.4 ✅ `GUESS` message: gateway validates the guess is in the allowed-guesses list, computes per-letter
     feedback (correct/present/absent) against the server-held target word, appends to session state,
     produces a guess-evaluated event, and returns the feedback to the client (not room-broadcast — this
     is single-player, private to that session).
-3.5 Win/loss detection: on a correct guess or exhausted attempts, mark the session complete and produce
-    a session-completed event.
+3.5 ✅ Win/loss detection: on a correct guess or exhausted attempts, mark the session complete and
+    produce a session-completed event (a second, distinct Kafka event from the guess-evaluated one, so
+    the future economy consumer can react specifically to completions).
+    (`internal/wordgame`, `internal/gateway/sessions.go` — commit 8126e4c.) Along the way, widened the
+    Kafka produce/consumer retry budget after hitting a real flake: a freshly created broker under
+    several topics being created back-to-back occasionally needed more than the original 2-second retry
+    window for partition-leader metadata to propagate.
 
 note: other word games and puzzle games will be added later, but starting with wordle-style game first for
  proof of concept of other features
