@@ -5,9 +5,8 @@ decided steps we're actually building against. Update this file as decisions cha
 
 ## Status
 
-- **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
-  stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
-  end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
+- **Milestone 1 (Local Loopback Foundation): done (1.1–1.7).** Came back to the skipped 1.6/1.7 after
+  Milestone 3 started; both done now.
 - **Milestone 2 (Room Sync): done (2.1–2.18).** Private code-joined rooms, movement, stub-filtered chat,
   and Kubernetes parity (Strimzi on `kind`, containerized gateway) all verified.
 - **Milestone 3 (Word Game & Economy):** 3.1–3.5 done (word list, session lifecycle, guess evaluation,
@@ -92,9 +91,14 @@ Goal: a single Docker Compose stack where a browser tab round-trips a message th
 1.5 ✅ Manual verification: open one tab, send a message, confirm it round-trips through Kafka and back
     to the same tab within reasonable latency. (Verified in a real browser pane, not just the automated
     test — folded into the 1.4 session rather than a separate pass.)
-1.6 ⏭️ skipped for now — One-command bootstrap (`Makefile` or script): `make up` builds and starts the
-    whole Compose stack.
-1.7 ⏭️ skipped for now (stretch) — GitHub Actions CI: `go vet` + `go test` on push.
+1.6 ✅ One-command bootstrap (`Makefile`): `make up`/`down` wrap the Compose stack (waits for the Kafka
+    healthcheck); `gateway`/`frontend` run the two dev-loop pieces; `vet`/`build`/`test`/`docker-build`
+    round it out. Picked up after Milestone 3 started, not immediately after 1.5.
+1.7 ✅ GitHub Actions CI (`.github/workflows/ci.yml`): `go vet` + `go build` + `go test` on push/PR, with
+    a Kafka service container (same single-broker KRaft config as Compose) so the Kafka-backed tests
+    actually run in CI rather than skipping. Verified the exact service-container config locally via a
+    bare `docker run` before committing, and checked the workflow with `actionlint` — but couldn't
+    validate an actual Actions run, since this repo has no GitHub remote yet.
 
 ## Milestone 2: Room Sync — Presence, Movement, and Private-Room Chat
 

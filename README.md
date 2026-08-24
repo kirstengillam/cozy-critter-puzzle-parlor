@@ -5,6 +5,10 @@ For the product/architecture context and the "why" behind decisions, see
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) (the finer-grained plan and status). This file is just
 the commands: how to run everything locally, and how to deploy to Kubernetes.
 
+A `Makefile` wraps the local-dev commands below — `make help` lists all targets (`up`, `down`,
+`gateway`, `frontend`, `vet`, `build`, `test`, `docker-build`). The full commands are still spelled out
+here for the Kubernetes path and for anyone who'd rather not use `make`.
+
 ## Prerequisites
 
 - Go 1.27+
