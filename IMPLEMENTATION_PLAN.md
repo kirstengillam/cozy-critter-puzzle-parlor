@@ -8,9 +8,9 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 1 (Local Loopback Foundation):** 1.1–1.5 done. 1.6 (Makefile bootstrap) and 1.7 (CI
   stretch) intentionally skipped for now — jumped to Milestone 2 once the loopback was proven working
   end to end in a real browser. Revisit 1.6/1.7 opportunistically later.
-- **Milestone 2 (Room Sync):** 2.1–2.6 done (private code-joined rooms; movement produce/broadcast
-  backend). Frontend rendering (2.7) and the two-tab manual test (2.8) are next; chat (2.9+) and k8s
-  parity (2.14+) after that.
+- **Milestone 2 (Room Sync):** 2.1–2.8 done (private code-joined rooms; movement produce/broadcast
+  backend; lobby UI + Phaser grid room + click-to-move rendering). Chat (2.9+) and k8s parity (2.14+)
+  are next.
 - **Milestones 3–4:** not started.
 
 ## Locked-in decisions
@@ -114,9 +114,18 @@ can chat, with messages passing through a (stub) filter.
     switching to direct per-partition readers positioned synchronously before startup returns (same
     technique as the Milestone 1 fix). Multi-instance fan-out therefore still needs a mechanism
     (deferred — see "Open / deferred" below), just not a consumer group as originally assumed.
-2.7 Frontend: Phaser scene renders a simple grid room; other players are sprites; on a broadcast MOVE
-    event, tween the corresponding sprite toward the target position.
-2.8 Two-tab manual test: join both tabs to the same room code, move in Tab A, confirm Tab B updates.
+2.7 ✅ Frontend: Phaser scene renders a simple grid room; other players are sprites; on a broadcast MOVE
+    event, tween the corresponding sprite toward the target position. (`frontend/main.js`,
+    `frontend/critters.js` for the swappable placeholder-shape manifest.) Hit a real bug: Phaser's
+    `pointer.x/y` came back `Infinity` in testing, silently turning every click into a move to (0,0);
+    fixed by reading the native DOM event's `offsetX/offsetY` instead.
+2.8 ✅ Two-tab manual test: join both tabs to the same room code, move in Tab A, confirm Tab B updates.
+    Verified via console logs that both tabs receive byte-identical `PLAYER_MOVED` payloads, and that
+    single-tab rendering is correct end to end. A true side-by-side visual comparison wasn't reliable in
+    this session's browser-automation tool specifically — it doesn't keep a second tab's viewport
+    genuinely live once "selected," which starves Phaser's render loop for that tab — so this is
+    confirmed at the data/single-tab level rather than a two-window screenshot. Worth a quick manual
+    check with two real browser windows side by side if you want to see it live yourself.
 
 **Chat (stub pipeline)**
 2.9 Define `chat-messages` payload as Go structs (mirrors PRD schema), create the topic.
