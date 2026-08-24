@@ -10,7 +10,10 @@ const WS_PORT = 8080;
 const GRID_SIZE = 32;
 const GRID_COLS = 16;
 const GRID_ROWS = 9;
-const MOVE_TWEEN_MS = 200;
+// At 200ms, the walking animation (8 frames @ 10fps = 800ms/cycle) barely
+// got 2 frames in before snapping back to idle — slowed down so the walk
+// cycle actually reads as walking.
+const MOVE_TWEEN_MS = 350;
 
 // Displays the whole scene (background, critters, labels) at 2x CSS size
 // via Phaser's scale-manager zoom, without changing any grid/movement math
