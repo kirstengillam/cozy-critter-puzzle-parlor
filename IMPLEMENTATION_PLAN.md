@@ -12,6 +12,9 @@ decided steps we're actually building against. Update this file as decisions cha
 - **Milestone 3 (Word Game & Economy): done (3.1–3.10).** Word list, session lifecycle, guess
   evaluation, ephemeral economy with a real HMAC-verified ledger, and the frontend UI all built and
   verified — including a full manual playthrough to a win with the correct reward credited.
+- **Between Milestone 3 and 4 — UI polish pass (not a numbered step):** checkerboard placeholder floor
+  texture, per-player name labels on avatars, and an in-world game table (a clickable map tile) as a
+  second way to start the word game, alongside the existing lobby button. See "Locked-in decisions."
 - **Milestone 4:** not started.
 
 ## Locked-in decisions
@@ -61,7 +64,15 @@ decided steps we're actually building against. Update this file as decisions cha
   rectangles, maybe a label) for critters and rooms in the meantime. Load sprites from a small config/
   manifest (critter type → texture key) rather than hardcoding shapes inline in scene code, so that
   real art (commissioned from a friend, or a self-made early pass) is a data/asset swap later, not a
-  rendering-logic rewrite. Relevant starting at Milestone 2 step 2.7.
+  rendering-logic rewrite. Relevant starting at Milestone 2 step 2.7. The room floor is now a checkerboard
+  placeholder (`drawFloor` in `frontend/main.js`) rather than a flat rectangle — same "placeholder, still
+  swappable" spirit, just less bare.
+- **Word game has two entry points: the lobby button and an in-world game table.** A fixed map tile
+  (`GAME_TABLE_CELL` in `frontend/main.js`, currently (12, 1)) that a player walks onto (a normal
+  click-to-move) to trigger `START_GAME` on arrival — matches the PRD's "game tables" framing. Kept
+  alongside the standalone lobby button rather than replacing it, for ease of testing; may remove the
+  button later. The word game still doesn't require room membership either way (per the earlier
+  decision) — the table is just a second, in-world trigger for the same room-independent game.
 
 ## Open / deferred (not blocking the next milestones)
 
