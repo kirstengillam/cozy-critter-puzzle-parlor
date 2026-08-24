@@ -12,6 +12,11 @@ const GRID_COLS = 16;
 const GRID_ROWS = 9;
 const MOVE_TWEEN_MS = 200;
 
+// Displays the whole scene (background, critters, labels) at 2x CSS size
+// via Phaser's scale-manager zoom, without changing any grid/movement math
+// below — the game's internal coordinate space stays GRID_COLS*GRID_SIZE.
+const ZOOM = 2;
+
 // Native cat sprites are 64x64; scale them down to fit a 32px grid cell.
 const CRITTER_SCALE = 0.5;
 const LABEL_OFFSET = 16;
@@ -346,8 +351,12 @@ connect();
 
 new Phaser.Game({
   type: Phaser.AUTO,
-  width: GRID_COLS * GRID_SIZE,
-  height: GRID_ROWS * GRID_SIZE,
+  scale: {
+    mode: Phaser.Scale.NONE,
+    width: GRID_COLS * GRID_SIZE,
+    height: GRID_ROWS * GRID_SIZE,
+    zoom: ZOOM,
+  },
   parent: "game",
   backgroundColor: "#2d2d3a",
   pixelArt: true, // crisp nearest-neighbor scaling for the pixel-art sprites
@@ -366,9 +375,11 @@ new Phaser.Game({
         // pointer.x/y go through Phaser's scale-manager transform, which
         // can come back Infinity/NaN in some hosting contexts before it
         // settles. event.offsetX/Y are canvas-relative straight from the
-        // browser and don't depend on that transform.
-        const offsetX = pointer.event?.offsetX ?? pointer.x;
-        const offsetY = pointer.event?.offsetY ?? pointer.y;
+        // browser and don't depend on that transform — but they're in
+        // rendered CSS pixels, which the ZOOM factor makes larger than the
+        // internal game coordinate space, so divide it back out.
+        const offsetX = (pointer.event?.offsetX ?? pointer.x) / ZOOM;
+        const offsetY = (pointer.event?.offsetY ?? pointer.y) / ZOOM;
         const targetX = Math.floor(offsetX / GRID_SIZE);
         const targetY = Math.floor(offsetY / GRID_SIZE);
         const table = findTableAt(targetX, targetY);
