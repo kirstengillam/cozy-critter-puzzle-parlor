@@ -21,6 +21,12 @@ const ZOOM = 2;
 const CRITTER_SCALE = 0.5;
 const LABEL_OFFSET = 16;
 
+// Speech bubble shown above a player's sprite for each chat message,
+// alongside the persistent lobby chat log.
+const BUBBLE_OFFSET = 24;
+const BUBBLE_DURATION_MS = 4000;
+const BUBBLE_WRAP_WIDTH = 110;
+
 // Room background art is a 256x144 placeholder; scaling it 2x fills the
 // GRID_COLS x GRID_ROWS canvas exactly (16*32 x 9*32 = 512x288) without
 // touching the critter sprite scale tuned above.
@@ -110,6 +116,7 @@ function handleMessage(event) {
       break;
     case "CHAT_MESSAGE":
       appendChatLine(`${env.payload.display_name || env.payload.player_id}: ${env.payload.raw_text}`, false);
+      showChatBubble(env.payload.player_id, env.payload.raw_text);
       break;
     case "CHAT_REJECTED":
       appendChatLine(`(your message was rejected: "${env.payload.raw_text}")`, true);
@@ -135,6 +142,36 @@ function appendChatLine(text, rejected) {
   if (rejected) p.className = "rejected";
   chatLogEl.appendChild(p);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
+}
+
+// Pops a temporary speech bubble above playerId's sprite. No-ops if that
+// player doesn't have a sprite yet (they haven't moved since joining) —
+// same constraint the name label already has. Position is kept in sync
+// with the sprite every frame (see the scene's update function below),
+// so it follows the player through any in-progress movement tween.
+function showChatBubble(playerId, text) {
+  const entry = sprites[playerId];
+  if (!entry || !scene) return;
+
+  if (entry.bubbleTimer) entry.bubbleTimer.remove(false);
+  if (entry.bubble) entry.bubble.destroy();
+
+  entry.bubble = scene.add
+    .text(entry.image.x, entry.image.y - BUBBLE_OFFSET, text, {
+      fontSize: "9px",
+      color: "#222222",
+      backgroundColor: "#ffffff",
+      padding: { x: 4, y: 2 },
+      wordWrap: { width: BUBBLE_WRAP_WIDTH },
+      align: "center",
+    })
+    .setOrigin(0.5, 1);
+
+  entry.bubbleTimer = scene.time.delayedCall(BUBBLE_DURATION_MS, () => {
+    entry.bubble?.destroy();
+    entry.bubble = null;
+    entry.bubbleTimer = null;
+  });
 }
 
 function cellCenter(cellX, cellY) {
@@ -396,6 +433,11 @@ new Phaser.Game({
         if (table) pendingGameTable = table;
         send("MOVE", { target_x: targetX, target_y: targetY, facing_direction: "NORTH" });
       });
+    },
+    update: function () {
+      for (const entry of Object.values(sprites)) {
+        entry.bubble?.setPosition(entry.image.x, entry.image.y - BUBBLE_OFFSET);
+      }
     },
   },
 });
