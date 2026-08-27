@@ -379,6 +379,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 function onGameStarted(payload) {
+  connectionsSessionId = null;
+  connectionsEl.style.display = "none";
+
   wordGameSessionId = payload.session_id;
   wordGameWordLength = payload.word_length;
   wordGameMaxGuesses = payload.guesses_remaining;
@@ -479,6 +482,9 @@ function renderConnectionsSolved(solvedGroups) {
 }
 
 function onConnectionsStarted(payload) {
+  wordGameSessionId = null;
+  wordgameEl.style.display = "none";
+
   connectionsSessionId = payload.session_id;
   connectionsSelected = [];
   connectionsStatusEl.textContent = "";
