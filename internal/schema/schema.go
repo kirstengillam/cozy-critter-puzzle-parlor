@@ -19,6 +19,7 @@ const (
 	TypeJoined         = "JOINED"
 	TypeMove           = "MOVE"
 	TypePlayerMoved    = "PLAYER_MOVED"
+	TypePlayerLeft     = "PLAYER_LEFT"
 	TypeChat           = "CHAT"
 	TypeChatMessage    = "CHAT_MESSAGE"
 	TypeChatRejected   = "CHAT_REJECTED"
@@ -54,6 +55,14 @@ type RoomCreated struct {
 // Joined is the payload for a JOINED response.
 type Joined struct {
 	RoomCode string `json:"room_code"`
+	PlayerID string `json:"player_id"`
+}
+
+// PlayerLeft is the payload broadcast to a room when one of its players
+// disconnects, so remaining clients can remove that player's sprite
+// instead of leaving it frozen in place indefinitely.
+type PlayerLeft struct {
+	RoomID   string `json:"room_id"`
 	PlayerID string `json:"player_id"`
 }
 

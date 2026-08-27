@@ -362,6 +362,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if joinedRoomCode != "" && playerID != "" {
 			g.hub.leave(joinedRoomCode, playerID)
+			g.announceLeave(joinedRoomCode, playerID)
 		}
 		if playerID != "" {
 			g.hub.unregisterPlayer(playerID)
@@ -501,6 +502,23 @@ func (g *Gateway) announceJoin(ctx context.Context, roomCode, playerID string) {
 		log.Printf("gateway: marshal join announcement: %v", err)
 		return
 	}
+	g.hub.broadcast(ctx, roomCode, data)
+}
+
+// announceLeave broadcasts playerID's disconnection to the rest of
+// roomCode, so their sprite is removed instead of staying frozen in
+// place for players who were already connected (a newly-joining player
+// never has this problem — sendRoomSnapshot only sends still-present
+// players). Uses its own context rather than the disconnecting
+// connection's request context, which is cancelled right as this runs.
+func (g *Gateway) announceLeave(roomCode, playerID string) {
+	data, err := marshalEnvelope(schema.TypePlayerLeft, schema.PlayerLeft{RoomID: roomCode, PlayerID: playerID})
+	if err != nil {
+		log.Printf("gateway: marshal leave announcement: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	g.hub.broadcast(ctx, roomCode, data)
 }
 

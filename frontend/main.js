@@ -146,6 +146,9 @@ function handleMessage(event) {
     case "PLAYER_MOVED":
       onPlayerMoved(env.payload);
       break;
+    case "PLAYER_LEFT":
+      onPlayerLeft(env.payload);
+      break;
     case "CHAT_MESSAGE":
       appendChatLine(`${env.payload.display_name || env.payload.player_id}: ${env.payload.raw_text}`, false);
       showChatBubble(env.payload.player_id, env.payload.raw_text);
@@ -294,6 +297,19 @@ function onPlayerMoved(evt) {
     pendingGameTable = null;
     startGameAtTable(table);
   }
+}
+
+// Removes a disconnected player's sprite so it doesn't stay frozen in
+// place forever for everyone still in the room.
+function onPlayerLeft(payload) {
+  const entry = sprites[payload.player_id];
+  if (!entry) return;
+
+  if (entry.bubbleTimer) entry.bubbleTimer.remove(false);
+  if (entry.bubble) entry.bubble.destroy();
+  entry.image.destroy();
+  entry.label.destroy();
+  delete sprites[payload.player_id];
 }
 
 const KEYBOARD_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];

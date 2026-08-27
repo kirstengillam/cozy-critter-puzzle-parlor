@@ -145,6 +145,61 @@ func TestUnknownMessageType(t *testing.T) {
 	}
 }
 
+// TestPlayerLeftBroadcastOnDisconnect doesn't touch Kafka (announceLeave
+// is a direct hub broadcast, unlike movement/chat), so it runs without
+// the broker-skip guard the other room tests need.
+func TestPlayerLeftBroadcastOnDisconnect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	gw := New(nil, nil)
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	stayer := dial(t, srv)
+	defer stayer.CloseNow()
+
+	leaver := dial(t, srv)
+
+	sendEnvelope(t, ctx, stayer, schema.TypeCreateRoom, struct{}{})
+	created := readEnvelope(t, ctx, stayer)
+	var room schema.RoomCreated
+	if err := json.Unmarshal(created.Payload, &room); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+
+	drainOne := func(who string, conn *websocket.Conn, wantType string) {
+		t.Helper()
+		if env := readEnvelope(t, ctx, conn); env.Type != wantType {
+			t.Fatalf("%s: got envelope type %q, want %q", who, env.Type, wantType)
+		}
+	}
+
+	sendEnvelope(t, ctx, stayer, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "stayer", RoomCode: room.RoomCode})
+	drainOne("stayer join", stayer, schema.TypeJoined)
+	drainOne("stayer (own join announce)", stayer, schema.TypePlayerMoved)
+
+	sendEnvelope(t, ctx, leaver, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "leaver", RoomCode: room.RoomCode})
+	drainOne("leaver (room snapshot)", leaver, schema.TypePlayerMoved)
+	drainOne("leaver join", leaver, schema.TypeJoined)
+	drainOne("leaver (own join announce)", leaver, schema.TypePlayerMoved)
+	drainOne("stayer (leaver's join announce)", stayer, schema.TypePlayerMoved)
+
+	leaver.CloseNow()
+
+	env := readEnvelope(t, ctx, stayer)
+	if env.Type != schema.TypePlayerLeft {
+		t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypePlayerLeft)
+	}
+	var left schema.PlayerLeft
+	if err := json.Unmarshal(env.Payload, &left); err != nil {
+		t.Fatalf("unmarshal PlayerLeft: %v", err)
+	}
+	if left.PlayerID != "leaver" || left.RoomID != room.RoomCode {
+		t.Fatalf("unexpected PlayerLeft event %+v", left)
+	}
+}
+
 func TestMovementBroadcast(t *testing.T) {
 	const broker = "localhost:9092"
 
