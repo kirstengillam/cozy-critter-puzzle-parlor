@@ -129,6 +129,19 @@ func (h *hub) currentPosition(roomCode, playerID string) position {
 	return h.position[roomCode][playerID]
 }
 
+// roomSnapshot returns a copy of every player id -> position currently
+// tracked for roomCode, so a newly-joined client can be brought up to
+// speed on players who were already there before it ever sees a MOVE.
+func (h *hub) roomSnapshot(roomCode string) map[string]position {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	snapshot := make(map[string]position, len(h.position[roomCode]))
+	for id, p := range h.position[roomCode] {
+		snapshot[id] = p
+	}
+	return snapshot
+}
+
 func (h *hub) setPosition(roomCode, playerID string, p position) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

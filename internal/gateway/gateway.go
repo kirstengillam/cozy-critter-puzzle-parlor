@@ -442,8 +442,66 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, conn *safeConn, payload js
 	g.hub.join(req.RoomCode, req.PlayerID, conn)
 	g.hub.registerPlayer(req.PlayerID, conn)
 	g.hub.setDisplayName(req.PlayerID, req.DisplayName)
+
+	// Bring the joiner up to speed on everyone already in the room before
+	// telling them they've joined, so their client has sprites for
+	// existing players immediately instead of only after each one's next
+	// move. The reverse direction — existing players seeing this new
+	// player — is handled by announceJoin below.
+	g.sendRoomSnapshot(ctx, conn, req.RoomCode, req.PlayerID)
 	g.send(ctx, conn, schema.TypeJoined, schema.Joined{RoomCode: req.RoomCode, PlayerID: req.PlayerID})
+	g.announceJoin(ctx, req.RoomCode, req.PlayerID)
+
 	return req.RoomCode, req.PlayerID, nil
+}
+
+// sendRoomSnapshot sends conn one PLAYER_MOVED-shaped event per player
+// already in roomCode (current position == target position, so the
+// client spawns each sprite in place with no tween), skipping the
+// joining player itself.
+func (g *Gateway) sendRoomSnapshot(ctx context.Context, conn *safeConn, roomCode, joiningPlayerID string) {
+	for id, pos := range g.hub.roomSnapshot(roomCode) {
+		if id == joiningPlayerID {
+			continue
+		}
+		evt := schema.PlayerPositionEvent{
+			PlayerID:    id,
+			DisplayName: g.hub.displayNameFor(id),
+			RoomID:      roomCode,
+			Action:      "MOVE",
+			CurrentX:    pos.X,
+			CurrentY:    pos.Y,
+			TargetX:     pos.X,
+			TargetY:     pos.Y,
+		}
+		g.send(ctx, conn, schema.TypePlayerMoved, evt)
+	}
+}
+
+// announceJoin broadcasts playerID's current position to every connection
+// already in roomCode (including the joiner's own, now-registered
+// connection), so a newly-joined player's sprite appears for everyone
+// else immediately instead of only after their first move.
+func (g *Gateway) announceJoin(ctx context.Context, roomCode, playerID string) {
+	pos := g.hub.currentPosition(roomCode, playerID)
+	evt := schema.PlayerPositionEvent{
+		EventID:     newEventID(),
+		Timestamp:   time.Now().UnixMilli(),
+		PlayerID:    playerID,
+		DisplayName: g.hub.displayNameFor(playerID),
+		RoomID:      roomCode,
+		Action:      "JOIN",
+		CurrentX:    pos.X,
+		CurrentY:    pos.Y,
+		TargetX:     pos.X,
+		TargetY:     pos.Y,
+	}
+	data, err := marshalEnvelope(schema.TypePlayerMoved, evt)
+	if err != nil {
+		log.Printf("gateway: marshal join announcement: %v", err)
+		return
+	}
+	g.hub.broadcast(ctx, roomCode, data)
 }
 
 func (g *Gateway) handleMove(ctx context.Context, conn *safeConn, roomCode, playerID string, payload json.RawMessage) {

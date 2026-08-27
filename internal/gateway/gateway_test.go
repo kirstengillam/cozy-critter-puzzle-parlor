@@ -181,15 +181,37 @@ func TestMovementBroadcast(t *testing.T) {
 		t.Fatalf("unmarshal RoomCreated: %v", err)
 	}
 
+	checkPresence := func(who string, env schema.Envelope, wantPlayerID string, wantX, wantY int) {
+		t.Helper()
+		if env.Type != schema.TypePlayerMoved {
+			t.Fatalf("%s: got envelope type %q, want %q", who, env.Type, schema.TypePlayerMoved)
+		}
+		var evt schema.PlayerPositionEvent
+		if err := json.Unmarshal(env.Payload, &evt); err != nil {
+			t.Fatalf("%s: unmarshal PlayerPositionEvent: %v", who, err)
+		}
+		if evt.PlayerID != wantPlayerID || evt.RoomID != room.RoomCode || evt.CurrentX != wantX || evt.CurrentY != wantY || evt.TargetX != wantX || evt.TargetY != wantY {
+			t.Fatalf("%s: unexpected event %+v", who, evt)
+		}
+	}
+
 	sendEnvelope(t, ctx, mover, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "mover", RoomCode: room.RoomCode})
 	if env := readEnvelope(t, ctx, mover); env.Type != schema.TypeJoined {
 		t.Fatalf("mover join: got %q, want JOINED", env.Type)
 	}
+	// Alone in the room so far: mover's own join announcement, spawned at
+	// the origin, and nothing else.
+	checkPresence("mover (own join announce)", readEnvelope(t, ctx, mover), "mover", 0, 0)
 
 	sendEnvelope(t, ctx, observer, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "observer", RoomCode: room.RoomCode})
+	// Before JOINED: a snapshot of everyone already present, i.e. mover.
+	checkPresence("observer (room snapshot)", readEnvelope(t, ctx, observer), "mover", 0, 0)
 	if env := readEnvelope(t, ctx, observer); env.Type != schema.TypeJoined {
 		t.Fatalf("observer join: got %q, want JOINED", env.Type)
 	}
+	// observer's own join announcement reaches both connections.
+	checkPresence("observer (own join announce)", readEnvelope(t, ctx, observer), "observer", 0, 0)
+	checkPresence("mover (observer's join announce)", readEnvelope(t, ctx, mover), "observer", 0, 0)
 
 	sendEnvelope(t, ctx, mover, schema.TypeMove, schema.MoveRequest{TargetX: 42, TargetY: 7, FacingDirection: "NORTH_EAST"})
 
@@ -247,15 +269,30 @@ func TestChatApprovedBroadcastsAndRejectedStaysPrivate(t *testing.T) {
 		t.Fatalf("unmarshal RoomCreated: %v", err)
 	}
 
+	// Joining now also exchanges presence (room snapshot + join
+	// announcement) as PLAYER_MOVED events, unrelated to this test's
+	// concern — drain those so later reads land on the chat messages
+	// this test actually cares about.
+	drainPresence := func(who string, conn *websocket.Conn) {
+		t.Helper()
+		if env := readEnvelope(t, ctx, conn); env.Type != schema.TypePlayerMoved {
+			t.Fatalf("%s: got envelope type %q, want %q (presence)", who, env.Type, schema.TypePlayerMoved)
+		}
+	}
+
 	sendEnvelope(t, ctx, speaker, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "speaker", RoomCode: room.RoomCode})
 	if env := readEnvelope(t, ctx, speaker); env.Type != schema.TypeJoined {
 		t.Fatalf("speaker join: got %q, want JOINED", env.Type)
 	}
+	drainPresence("speaker (own join announce)", speaker)
 
 	sendEnvelope(t, ctx, listener, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "listener", RoomCode: room.RoomCode})
+	drainPresence("listener (room snapshot)", listener)
 	if env := readEnvelope(t, ctx, listener); env.Type != schema.TypeJoined {
 		t.Fatalf("listener join: got %q, want JOINED", env.Type)
 	}
+	drainPresence("listener (own join announce)", listener)
+	drainPresence("speaker (listener's join announce)", speaker)
 
 	// Approved message: both speaker and listener should see it broadcast.
 	sendEnvelope(t, ctx, speaker, schema.TypeChat, schema.ChatRequest{Text: "hey everyone!"})
