@@ -50,12 +50,11 @@ const BACKGROUND_SCALE = 2;
 
 // Each visual table in the background art is a spot players can walk onto
 // to start a game. Cell coords were derived from the background image's
-// table blob centroids, scaled by BACKGROUND_SCALE. gameType lets future
-// tables launch something other than the word game without touching the
-// movement/arrival plumbing below.
+// table blob centroids, scaled by BACKGROUND_SCALE — there are exactly 3
+// tables drawn, one per game.
 const GAME_TABLES = [
   { id: "table-a", cell: { x: 8, y: 2 }, gameType: "word" },
-  { id: "table-b", cell: { x: 3, y: 4 }, gameType: "word" },
+  { id: "table-b", cell: { x: 3, y: 4 }, gameType: "connect_four" },
   { id: "table-c", cell: { x: 10, y: 4 }, gameType: "connections" },
 ];
 
@@ -66,6 +65,8 @@ function findTableAt(x, y) {
 function startGameAtTable(table) {
   if (table.gameType === "connections") {
     send("START_CONNECTIONS", { player_id: playerId });
+  } else if (table.gameType === "connect_four") {
+    send("START_CONNECT_FOUR", { player_id: playerId });
   } else {
     send("START_GAME", { player_id: playerId });
   }
@@ -107,6 +108,10 @@ const connSolvedEl = document.getElementById("conn-solved");
 const connMistakesEl = document.getElementById("conn-mistakes");
 const connSubmitEl = document.getElementById("conn-submit");
 const connectionsStatusEl = document.getElementById("connections-status");
+
+const connectFourEl = document.getElementById("connectfour");
+const c4BoardEl = document.getElementById("c4-board");
+const c4StatusEl = document.getElementById("c4-status");
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -167,6 +172,18 @@ function handleMessage(event) {
       break;
     case "CONNECTIONS_RESULT":
       onConnectionsResult(env.payload);
+      break;
+    case "CONNECT_FOUR_WAITING":
+      onConnectFourWaiting(env.payload);
+      break;
+    case "CONNECT_FOUR_STARTED":
+      onConnectFourStarted(env.payload);
+      break;
+    case "CONNECT_FOUR_RESULT":
+      onConnectFourResult(env.payload);
+      break;
+    case "CONNECT_FOUR_OPPONENT_LEFT":
+      onConnectFourOpponentLeft(env.payload);
       break;
     case "CURRENCY_BALANCE_UPDATED":
       balanceAmountEl.textContent = env.payload.balance;
@@ -277,7 +294,7 @@ function onPlayerMoved(evt) {
       x: target.x,
       y: target.y,
       duration,
-      onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "idle"), true),
+      onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "sitting"), true),
     });
     scene.tweens.add({
       targets: entry.label,
@@ -397,6 +414,7 @@ document.addEventListener("keydown", (e) => {
 function onGameStarted(payload) {
   connectionsSessionId = null;
   connectionsEl.style.display = "none";
+  closeConnectFour();
 
   wordGameSessionId = payload.session_id;
   wordGameWordLength = payload.word_length;
@@ -500,6 +518,7 @@ function renderConnectionsSolved(solvedGroups) {
 function onConnectionsStarted(payload) {
   wordGameSessionId = null;
   wordgameEl.style.display = "none";
+  closeConnectFour();
 
   connectionsSessionId = payload.session_id;
   connectionsSelected = [];
@@ -544,6 +563,103 @@ function onConnectionsResult(payload) {
     connectionsStatusEl.textContent = "Out of guesses — better luck next time.";
     connectionsSessionId = null;
   }
+}
+
+let c4SessionId = null;
+let c4YourSymbol = null; // 1 or 2 (connectfour.PlayerOne/PlayerTwo)
+let c4CurrentTurn = null; // player id whose turn it currently is, or null once the match is over
+
+// Hides the Connect Four board and clears its session — called both
+// when switching to a different game (see onGameStarted/
+// onConnectionsStarted) and internally before showing a fresh board.
+function closeConnectFour() {
+  c4SessionId = null;
+  c4YourSymbol = null;
+  c4CurrentTurn = null;
+  connectFourEl.style.display = "none";
+}
+
+function buildConnectFourBoard(board) {
+  c4BoardEl.innerHTML = "";
+  for (let r = 0; r < board.length; r++) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "c4-row";
+    for (let c = 0; c < board[r].length; c++) {
+      const cell = document.createElement("div");
+      cell.className = "c4-cell" + (board[r][c] === 1 ? " p1" : board[r][c] === 2 ? " p2" : "");
+      cell.addEventListener("click", () => sendConnectFourMove(c));
+      rowEl.appendChild(cell);
+    }
+    c4BoardEl.appendChild(rowEl);
+  }
+}
+
+// Greys out empty cells (real discs already have their own cursor: default
+// via .p1/.p2) whenever it isn't this client's turn, so idle clicks read
+// as visibly inert instead of silently doing nothing.
+function updateConnectFourTurnUI() {
+  c4BoardEl.classList.toggle("not-your-turn", c4CurrentTurn !== playerId);
+}
+
+function sendConnectFourMove(column) {
+  if (!c4SessionId || c4CurrentTurn !== playerId) return;
+  send("CONNECT_FOUR_MOVE", { session_id: c4SessionId, column });
+}
+
+function onConnectFourWaiting(payload) {
+  wordGameSessionId = null;
+  wordgameEl.style.display = "none";
+  connectionsSessionId = null;
+  connectionsEl.style.display = "none";
+
+  c4SessionId = payload.session_id;
+  c4YourSymbol = null;
+  c4CurrentTurn = null;
+  buildConnectFourBoard(
+    Array.from({ length: 6 }, () => Array(7).fill(0)),
+  );
+  c4StatusEl.textContent = "Waiting for an opponent to join...";
+  connectFourEl.style.display = "block";
+}
+
+function onConnectFourStarted(payload) {
+  wordGameSessionId = null;
+  wordgameEl.style.display = "none";
+  connectionsSessionId = null;
+  connectionsEl.style.display = "none";
+
+  c4SessionId = payload.session_id;
+  c4YourSymbol = payload.your_symbol;
+  c4CurrentTurn = payload.first_turn_player_id;
+  buildConnectFourBoard(payload.board);
+  updateConnectFourTurnUI();
+  const opponentName = payload.opponent_display_name || payload.opponent_id.replace(/^player_/, "");
+  const yourColor = c4YourSymbol === 1 ? "red" : "yellow";
+  const turn = c4CurrentTurn === playerId ? "your turn" : "their turn";
+  c4StatusEl.textContent = `Playing against ${opponentName} — you're ${yourColor}, ${turn}.`;
+  connectFourEl.style.display = "block";
+}
+
+function onConnectFourResult(payload) {
+  if (payload.session_id !== c4SessionId) return;
+  buildConnectFourBoard(payload.board);
+  c4CurrentTurn = payload.current_turn_player_id || null;
+  updateConnectFourTurnUI();
+
+  if (payload.status === "WON") {
+    c4StatusEl.textContent = payload.winner_id === playerId ? "You won! 🎉" : "You lost — better luck next time.";
+  } else if (payload.status === "DRAW") {
+    c4StatusEl.textContent = "It's a draw!";
+  } else {
+    c4StatusEl.textContent = c4CurrentTurn === playerId ? "Your turn" : "Their turn";
+  }
+}
+
+function onConnectFourOpponentLeft(payload) {
+  if (payload.session_id !== c4SessionId) return;
+  c4CurrentTurn = null;
+  updateConnectFourTurnUI();
+  c4StatusEl.textContent = "Your opponent disconnected — you win!";
 }
 
 // Temp placeholder room background (see IMPLEMENTATION_PLAN.md's

@@ -72,6 +72,20 @@
     .conn-dot.used { background: #d98a8a; }
 
     #connections-status { margin-top: 0.5rem; font-size: 0.9rem; }
+
+    #connectfour { display: none; max-width: 300px; }
+    #c4-board {
+      display: flex; flex-direction: column; gap: 3px; margin-bottom: 0.5rem;
+      background: #2b5aa8; padding: 6px; border-radius: 6px; width: fit-content;
+    }
+    .c4-row { display: flex; gap: 3px; }
+    .c4-cell {
+      width: 34px; height: 34px; border-radius: 50%; background: #14141c; cursor: pointer;
+    }
+    .c4-cell.p1 { background: #d9524f; cursor: default; }
+    .c4-cell.p2 { background: #e8c93d; cursor: default; }
+    #c4-board.not-your-turn .c4-cell:not(.p1):not(.p2) { cursor: default; opacity: 0.6; }
+    #c4-status { margin-top: 0.5rem; font-size: 0.9rem; }
   </style>
 </head>
 <body>
@@ -107,6 +121,10 @@
       <button id="conn-submit" disabled>Submit Group</button>
       <p id="connections-status"></p>
       <button id="new-connections">New Puzzle</button>
+    </div>
+    <div id="connectfour">
+      <div id="c4-board"></div>
+      <p id="c4-status"></p>
     </div>
   </div>
   <script src="vendor/phaser.min.js"></script>

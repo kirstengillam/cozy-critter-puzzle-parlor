@@ -21,6 +21,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/segmentio/kafka-go"
 
+	"cozy-critter-puzzle-parlor/internal/connectfour"
 	"cozy-critter-puzzle-parlor/internal/connectionsgame"
 	"cozy-critter-puzzle-parlor/internal/room"
 	"cozy-critter-puzzle-parlor/internal/schema"
@@ -32,12 +33,14 @@ const topicChatMessages = "chat-messages"
 const topicGameSessions = "game-sessions"
 const topicEconomyLedger = "economy-ledger"
 const topicConnectionsSessions = "connections-sessions"
+const topicConnectFourSessions = "connect-four-sessions"
 
 const PlayerPositionsPartitions = 6
 const ChatMessagesPartitions = 6
 const GameSessionsPartitions = 6
 const EconomyLedgerPartitions = 6
 const ConnectionsSessionsPartitions = 6
+const ConnectFourSessionsPartitions = 6
 
 type Gateway struct {
 	brokers                  []string
@@ -46,6 +49,7 @@ type Gateway struct {
 	hub                      *hub
 	sessions                 *sessionStore
 	connectionsSessions      *connectionsSessionStore
+	connectFourSessions      *connectFourStore
 	economy                  *economyStore
 	ledgerSecret             []byte
 	moveWriter               *kafka.Writer
@@ -53,6 +57,7 @@ type Gateway struct {
 	gameSessionWriter        *kafka.Writer
 	economyLedgerWriter      *kafka.Writer
 	connectionsSessionWriter *kafka.Writer
+	connectFourSessionWriter *kafka.Writer
 }
 
 // New creates a Gateway. allowedOrigins lists origin patterns (per
@@ -70,6 +75,7 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 		hub:                 newHub(),
 		sessions:            newSessionStore(),
 		connectionsSessions: newConnectionsSessionStore(),
+		connectFourSessions: newConnectFourStore(),
 		economy:             newEconomyStore(),
 		ledgerSecret:        ledgerSecret,
 		moveWriter: &kafka.Writer{
@@ -98,6 +104,11 @@ func New(brokers []string, allowedOrigins []string) *Gateway {
 		connectionsSessionWriter: &kafka.Writer{
 			Addr:     kafka.TCP(brokers...),
 			Topic:    topicConnectionsSessions,
+			Balancer: &kafka.Hash{}, // keyed by session id — see produce() call sites
+		},
+		connectFourSessionWriter: &kafka.Writer{
+			Addr:     kafka.TCP(brokers...),
+			Topic:    topicConnectFourSessions,
 			Balancer: &kafka.Hash{}, // keyed by session id — see produce() call sites
 		},
 	}
@@ -368,6 +379,7 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 		}
 		if playerID != "" {
 			g.hub.unregisterPlayer(playerID)
+			g.abandonConnectFour(playerID)
 		}
 	}()
 
@@ -414,6 +426,12 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 
 		case schema.TypeConnectionsGuess:
 			g.handleConnectionsGuess(ctx, conn, env.Payload)
+
+		case schema.TypeStartConnectFour:
+			g.handleStartConnectFour(ctx, conn, joinedRoomCode, playerID)
+
+		case schema.TypeConnectFourMove:
+			g.handleConnectFourMove(ctx, conn, playerID, env.Payload)
 
 		default:
 			g.sendError(ctx, conn, "unknown message type: "+env.Type)
@@ -944,6 +962,279 @@ func (g *Gateway) creditConnectionsWin(ctx context.Context, playerID, sessionID 
 		GameSessionID: sessionID,
 		Action:        "CREDIT",
 		Amount:        connectionsgame.RewardForWin(mistakesUsed),
+		CurrencyType:  schema.CurrencyCritterCoins,
+	}
+	evt.VerificationHash = signLedgerEvent(g.ledgerSecret, evt)
+
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal economy-ledger event: %v", err)
+		return
+	}
+	if err := produce(ctx, g.economyLedgerWriter, playerID, raw); err != nil {
+		log.Printf("gateway: produce economy-ledger event: %v", err)
+	}
+}
+
+// handleStartConnectFour pairs two players at a Connect Four table.
+// Unlike the word game and Connections, this genuinely requires prior
+// room membership (rejected if roomCode/playerID are empty) since
+// pairing happens per room/table, not per player — in practice the
+// frontend can't reach a table without having already joined a room.
+func (g *Gateway) handleStartConnectFour(ctx context.Context, conn *safeConn, roomCode, playerID string) {
+	if roomCode == "" || playerID == "" {
+		g.sendError(ctx, conn, "must join a room before starting connect four")
+		return
+	}
+
+	// Re-arriving at the table (e.g. walking onto the cell again) resends
+	// current state instead of creating a duplicate/conflicting session.
+	if sess, ok := g.connectFourSessions.sessionForPlayer(playerID); ok {
+		g.sendConnectFourState(ctx, conn, sess, playerID)
+		return
+	}
+
+	if pending, ok := g.connectFourSessions.pendingInRoom(roomCode); ok {
+		sess, ok := g.connectFourSessions.pair(pending.SessionID, playerID)
+		if !ok {
+			g.sendError(ctx, conn, "internal error")
+			return
+		}
+		g.produceConnectFourAudit(ctx, sess, "SESSION_STARTED")
+
+		g.send(ctx, conn, schema.TypeConnectFourStarted, schema.ConnectFourStarted{
+			SessionID:           sess.SessionID,
+			Board:               connectFourBoardPayload(sess.Board),
+			YourSymbol:          int(connectfour.PlayerTwo),
+			FirstTurnPlayerID:   sess.CurrentTurn,
+			OpponentID:          sess.Player1ID,
+			OpponentDisplayName: g.hub.displayNameFor(sess.Player1ID),
+		})
+		startedForPlayer1, err := marshalEnvelope(schema.TypeConnectFourStarted, schema.ConnectFourStarted{
+			SessionID:           sess.SessionID,
+			Board:               connectFourBoardPayload(sess.Board),
+			YourSymbol:          int(connectfour.PlayerOne),
+			FirstTurnPlayerID:   sess.CurrentTurn,
+			OpponentID:          sess.Player2ID,
+			OpponentDisplayName: g.hub.displayNameFor(sess.Player2ID),
+		})
+		if err != nil {
+			log.Printf("gateway: marshal connect-four-started for player one: %v", err)
+			return
+		}
+		g.hub.sendToPlayer(ctx, sess.Player1ID, startedForPlayer1)
+		return
+	}
+
+	sessionID := newEventID()
+	sess := g.connectFourSessions.createWaiting(sessionID, roomCode, playerID)
+	g.produceConnectFourAudit(ctx, sess, "SESSION_STARTED")
+	g.send(ctx, conn, schema.TypeConnectFourWaiting, schema.ConnectFourWaiting{SessionID: sess.SessionID})
+}
+
+// sendConnectFourState re-sends playerID's current match state — used
+// when they re-trigger START_CONNECT_FOUR while already waiting or
+// already paired, so re-arriving at the table is idempotent rather than
+// creating a second, conflicting session.
+func (g *Gateway) sendConnectFourState(ctx context.Context, conn *safeConn, sess connectFourSession, playerID string) {
+	if sess.Status == statusWaiting {
+		g.send(ctx, conn, schema.TypeConnectFourWaiting, schema.ConnectFourWaiting{SessionID: sess.SessionID})
+		return
+	}
+
+	symbol, opponentID := connectfour.PlayerOne, sess.Player2ID
+	if playerID == sess.Player2ID {
+		symbol, opponentID = connectfour.PlayerTwo, sess.Player1ID
+	}
+	g.send(ctx, conn, schema.TypeConnectFourStarted, schema.ConnectFourStarted{
+		SessionID:           sess.SessionID,
+		Board:               connectFourBoardPayload(sess.Board),
+		YourSymbol:          int(symbol),
+		FirstTurnPlayerID:   sess.CurrentTurn,
+		OpponentID:          opponentID,
+		OpponentDisplayName: g.hub.displayNameFor(opponentID),
+	})
+}
+
+func (g *Gateway) handleConnectFourMove(ctx context.Context, conn *safeConn, playerID string, payload json.RawMessage) {
+	var req schema.ConnectFourMoveRequest
+	if err := json.Unmarshal(payload, &req); err != nil {
+		g.sendError(ctx, conn, "invalid connect_four_move payload")
+		return
+	}
+
+	sess, ok := g.connectFourSessions.get(req.SessionID)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+	if sess.Status != statusInProgress {
+		g.sendError(ctx, conn, "match already finished")
+		return
+	}
+	if playerID != sess.CurrentTurn {
+		g.sendError(ctx, conn, "not your turn")
+		return
+	}
+
+	symbol := connectfour.PlayerOne
+	if playerID == sess.Player2ID {
+		symbol = connectfour.PlayerTwo
+	}
+
+	board, row, err := connectfour.DropDisc(sess.Board, req.Column, symbol)
+	if err != nil {
+		g.sendError(ctx, conn, err.Error())
+		return
+	}
+
+	status := statusInProgress
+	winnerID := ""
+	nextTurn := sess.Player2ID
+	if playerID == sess.Player2ID {
+		nextTurn = sess.Player1ID
+	}
+	if _, won := connectfour.CheckWin(board); won {
+		status = statusWon
+		winnerID = playerID
+		nextTurn = ""
+	} else if connectfour.IsFull(board) {
+		status = statusDraw
+		nextTurn = ""
+	}
+
+	updated, ok := g.connectFourSessions.recordMove(req.SessionID, board, nextTurn, status, winnerID)
+	if !ok {
+		g.sendError(ctx, conn, "unknown session id")
+		return
+	}
+
+	g.produceConnectFourAudit(ctx, updated, "MOVE_EVALUATED")
+	if status != statusInProgress {
+		g.produceConnectFourAudit(ctx, updated, "SESSION_COMPLETED")
+	}
+
+	if status == statusWon {
+		g.creditConnectFourWin(ctx, winnerID, req.SessionID)
+	} else if status == statusDraw {
+		g.creditConnectFourDraw(ctx, updated.Player1ID, req.SessionID)
+		g.creditConnectFourDraw(ctx, updated.Player2ID, req.SessionID)
+	}
+
+	result := schema.ConnectFourResult{
+		SessionID:           req.SessionID,
+		Column:              req.Column,
+		Row:                 row,
+		Symbol:              int(symbol),
+		Board:               connectFourBoardPayload(updated.Board),
+		CurrentTurnPlayerID: updated.CurrentTurn,
+		Status:              status,
+		WinnerID:            winnerID,
+	}
+	g.send(ctx, conn, schema.TypeConnectFourResult, result)
+
+	opponentID := updated.Player1ID
+	if playerID == updated.Player1ID {
+		opponentID = updated.Player2ID
+	}
+	data, err := marshalEnvelope(schema.TypeConnectFourResult, result)
+	if err != nil {
+		log.Printf("gateway: marshal connect-four-result: %v", err)
+		return
+	}
+	g.hub.sendToPlayer(ctx, opponentID, data)
+}
+
+// abandonConnectFour handles a mid-match disconnect: if playerID was
+// mid-game, the match is marked ABANDONED, the remaining player is
+// credited a win by forfeit, and notified. Uses its own context, like
+// announceLeave, since the disconnecting connection's request context is
+// being torn down right as this runs.
+func (g *Gateway) abandonConnectFour(playerID string) {
+	sess, opponentID, hadOpponent := g.connectFourSessions.abandon(playerID)
+	if !hadOpponent {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	updated, ok := g.connectFourSessions.recordMove(sess.SessionID, sess.Board, "", statusAbandoned, opponentID)
+	if !ok {
+		log.Printf("gateway: record connect-four abandonment: session %s not found", sess.SessionID)
+		return
+	}
+	g.produceConnectFourAudit(ctx, updated, "SESSION_COMPLETED")
+	g.creditConnectFourWin(ctx, opponentID, sess.SessionID)
+
+	data, err := marshalEnvelope(schema.TypeConnectFourOpponentLeft, schema.ConnectFourOpponentLeft{SessionID: sess.SessionID})
+	if err != nil {
+		log.Printf("gateway: marshal connect-four opponent-left: %v", err)
+		return
+	}
+	g.hub.sendToPlayer(ctx, opponentID, data)
+}
+
+// connectFourBoardPayload converts a connectfour.Board (a fixed array,
+// for value-copy safety internally) into the row-major [][]int shape the
+// wire schema uses.
+func connectFourBoardPayload(board connectfour.Board) schema.ConnectFourBoard {
+	out := make(schema.ConnectFourBoard, connectfour.Rows)
+	for r := range board {
+		row := make([]int, connectfour.Cols)
+		for c := range board[r] {
+			row[c] = int(board[r][c])
+		}
+		out[r] = row
+	}
+	return out
+}
+
+// produceConnectFourAudit writes one event to the connect-four-sessions
+// audit-log topic — same write-only role as game-sessions/
+// connections-sessions, never consumed for broadcast.
+func (g *Gateway) produceConnectFourAudit(ctx context.Context, sess connectFourSession, action string) {
+	evt := schema.ConnectFourSessionEvent{
+		SessionID: sess.SessionID,
+		RoomCode:  sess.RoomCode,
+		Player1ID: sess.Player1ID,
+		Player2ID: sess.Player2ID,
+		Timestamp: time.Now().UnixMilli(),
+		Action:    action,
+		Status:    sess.Status,
+		WinnerID:  sess.WinnerID,
+	}
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		log.Printf("gateway: marshal connect-four-session event: %v", err)
+		return
+	}
+	if err := produce(ctx, g.connectFourSessionWriter, sess.SessionID, raw); err != nil {
+		log.Printf("gateway: produce connect-four-session event: %v", err)
+	}
+}
+
+// creditConnectFourWin produces a signed CREDIT event to economy-ledger
+// for a Connect Four win (including a win by forfeit) — same
+// produce-then-consume pattern as creditWordGameWin/creditConnectionsWin.
+func (g *Gateway) creditConnectFourWin(ctx context.Context, playerID, sessionID string) {
+	g.creditConnectFour(ctx, playerID, sessionID, connectfour.RewardForWin())
+}
+
+// creditConnectFourDraw produces a signed CREDIT event to economy-ledger
+// for one player's share of a draw.
+func (g *Gateway) creditConnectFourDraw(ctx context.Context, playerID, sessionID string) {
+	g.creditConnectFour(ctx, playerID, sessionID, connectfour.RewardForDraw())
+}
+
+func (g *Gateway) creditConnectFour(ctx context.Context, playerID, sessionID string, amount int) {
+	evt := schema.EconomyLedgerEvent{
+		TransactionID: newEventID(),
+		Timestamp:     time.Now().UnixMilli(),
+		PlayerID:      playerID,
+		GameSessionID: sessionID,
+		Action:        "CREDIT",
+		Amount:        amount,
 		CurrencyType:  schema.CurrencyCritterCoins,
 	}
 	evt.VerificationHash = signLedgerEvent(g.ledgerSecret, evt)

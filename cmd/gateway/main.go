@@ -34,6 +34,9 @@ func main() {
 	if err := gw.EnsureTopic(setupCtx, "connections-sessions", gateway.ConnectionsSessionsPartitions); err != nil {
 		log.Fatalf("gateway: ensure connections-sessions topic: %v", err)
 	}
+	if err := gw.EnsureTopic(setupCtx, "connect-four-sessions", gateway.ConnectFourSessionsPartitions); err != nil {
+		log.Fatalf("gateway: ensure connect-four-sessions topic: %v", err)
+	}
 	cancel()
 
 	if err := gw.StartMovementBroadcast(context.Background()); err != nil {

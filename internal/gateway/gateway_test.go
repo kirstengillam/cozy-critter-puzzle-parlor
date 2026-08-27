@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"cozy-critter-puzzle-parlor/internal/connectfour"
 	"cozy-critter-puzzle-parlor/internal/schema"
 	"cozy-critter-puzzle-parlor/internal/wordgame"
 )
@@ -791,5 +793,268 @@ func TestWordGameLossDoesNotCreditCurrency(t *testing.T) {
 	defer shortCancel()
 	if _, _, err := player.Read(shortCtx); err == nil {
 		t.Fatal("expected no further message after a loss, but got one")
+	}
+}
+
+// drainPresenceMessages reads and discards n PLAYER_MOVED presence-sync
+// messages (room snapshots / join announcements — see gateway.go's
+// sendRoomSnapshot/announceJoin) so the caller's next read lands on
+// whatever it's actually waiting for. Same draining need as
+// TestPlayerLeftBroadcastOnDisconnect, packaged as a helper here since
+// these tests join two players into one room every time.
+func drainPresenceMessages(t *testing.T, ctx context.Context, conn *websocket.Conn, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if env := readEnvelope(t, ctx, conn); env.Type != schema.TypePlayerMoved {
+			t.Fatalf("draining join presence: got unexpected envelope type %q, want %q", env.Type, schema.TypePlayerMoved)
+		}
+	}
+}
+
+func TestConnectFourPairingAndWin(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "connect-four-sessions", ConnectFourSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.EnsureTopic(ctx, "economy-ledger", EconomyLedgerPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.StartEconomyLedger(ctx); err != nil {
+		t.Fatalf("start economy ledger: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	p1 := dial(t, srv)
+	defer p1.CloseNow()
+	p2 := dial(t, srv)
+	defer p2.CloseNow()
+
+	sendEnvelope(t, ctx, p1, schema.TypeCreateRoom, struct{}{})
+	var room schema.RoomCreated
+	if err := json.Unmarshal(readEnvelope(t, ctx, p1).Payload, &room); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+
+	// p1 joins alone, then p2 joins: p2 gets a snapshot of p1 plus its
+	// own join announce; p1 also gets p2's join announce.
+	sendEnvelope(t, ctx, p1, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "c4-one", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, p1); env.Type != schema.TypeJoined {
+		t.Fatalf("p1 join: got %q, want JOINED", env.Type)
+	}
+	drainPresenceMessages(t, ctx, p1, 1) // its own join announce
+
+	sendEnvelope(t, ctx, p2, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "c4-two", RoomCode: room.RoomCode})
+	drainPresenceMessages(t, ctx, p2, 1) // snapshot of p1
+	if env := readEnvelope(t, ctx, p2); env.Type != schema.TypeJoined {
+		t.Fatalf("p2 join: got %q, want JOINED", env.Type)
+	}
+	drainPresenceMessages(t, ctx, p2, 1) // its own join announce
+	drainPresenceMessages(t, ctx, p1, 1) // p2's join announce, reaching p1 too
+
+	sendEnvelope(t, ctx, p1, schema.TypeStartConnectFour, schema.StartConnectFourRequest{PlayerID: "c4-one"})
+	waitingEnv := readEnvelope(t, ctx, p1)
+	if waitingEnv.Type != schema.TypeConnectFourWaiting {
+		t.Fatalf("got envelope type %q, want %q", waitingEnv.Type, schema.TypeConnectFourWaiting)
+	}
+	var waiting schema.ConnectFourWaiting
+	if err := json.Unmarshal(waitingEnv.Payload, &waiting); err != nil {
+		t.Fatalf("unmarshal ConnectFourWaiting: %v", err)
+	}
+	if waiting.SessionID == "" {
+		t.Fatal("ConnectFourWaiting.SessionID is empty")
+	}
+
+	sendEnvelope(t, ctx, p2, schema.TypeStartConnectFour, schema.StartConnectFourRequest{PlayerID: "c4-two"})
+	startedP2Env := readEnvelope(t, ctx, p2)
+	if startedP2Env.Type != schema.TypeConnectFourStarted {
+		t.Fatalf("p2: got envelope type %q, want %q", startedP2Env.Type, schema.TypeConnectFourStarted)
+	}
+	var startedP2 schema.ConnectFourStarted
+	if err := json.Unmarshal(startedP2Env.Payload, &startedP2); err != nil {
+		t.Fatalf("unmarshal ConnectFourStarted (p2): %v", err)
+	}
+	if startedP2.YourSymbol != 2 || startedP2.OpponentID != "c4-one" || startedP2.FirstTurnPlayerID != "c4-one" {
+		t.Fatalf("unexpected ConnectFourStarted for p2: %+v", startedP2)
+	}
+
+	startedP1Env := readEnvelope(t, ctx, p1)
+	if startedP1Env.Type != schema.TypeConnectFourStarted {
+		t.Fatalf("p1: got envelope type %q, want %q", startedP1Env.Type, schema.TypeConnectFourStarted)
+	}
+	var startedP1 schema.ConnectFourStarted
+	if err := json.Unmarshal(startedP1Env.Payload, &startedP1); err != nil {
+		t.Fatalf("unmarshal ConnectFourStarted (p1): %v", err)
+	}
+	if startedP1.YourSymbol != 1 || startedP1.OpponentID != "c4-two" || startedP1.SessionID != waiting.SessionID {
+		t.Fatalf("unexpected ConnectFourStarted for p1: %+v", startedP1)
+	}
+
+	// p1 stacks column 0 four times, p2 plays column 1 in between, for a
+	// vertical win on p1's 4th move (turn order enforced throughout).
+	moves := []struct {
+		conn   *websocket.Conn
+		player string
+		col    int
+	}{
+		{p1, "c4-one", 0}, {p2, "c4-two", 1},
+		{p1, "c4-one", 0}, {p2, "c4-two", 1},
+		{p1, "c4-one", 0}, {p2, "c4-two", 1},
+		{p1, "c4-one", 0}, // the winning move
+	}
+
+	var lastResult schema.ConnectFourResult
+	for i, mv := range moves {
+		sendEnvelope(t, ctx, mv.conn, schema.TypeConnectFourMove, schema.ConnectFourMoveRequest{SessionID: waiting.SessionID, Column: mv.col})
+
+		// Every move goes to both players. Both results are unmarshaled
+		// into fresh, per-iteration variables — reusing one across
+		// iterations would let CurrentTurnPlayerID's `omitempty` (empty
+		// once the match ends) silently leave a stale value in place
+		// from an earlier iteration instead of clearing it.
+		p1Env := readEnvelope(t, ctx, p1)
+		if p1Env.Type != schema.TypeConnectFourResult {
+			t.Fatalf("move %d: p1 got envelope type %q, want %q", i, p1Env.Type, schema.TypeConnectFourResult)
+		}
+		p2Env := readEnvelope(t, ctx, p2)
+		if p2Env.Type != schema.TypeConnectFourResult {
+			t.Fatalf("move %d: p2 got envelope type %q, want %q", i, p2Env.Type, schema.TypeConnectFourResult)
+		}
+		var p1Result schema.ConnectFourResult
+		if err := json.Unmarshal(p1Env.Payload, &p1Result); err != nil {
+			t.Fatalf("move %d: unmarshal ConnectFourResult: %v", i, err)
+		}
+		var p2Result schema.ConnectFourResult
+		if err := json.Unmarshal(p2Env.Payload, &p2Result); err != nil {
+			t.Fatalf("move %d: unmarshal ConnectFourResult (p2): %v", i, err)
+		}
+		if !reflect.DeepEqual(p1Result, p2Result) {
+			t.Fatalf("move %d: p1 and p2 received different results: %+v vs %+v", i, p1Result, p2Result)
+		}
+		if i < len(moves)-1 && p1Result.Status != "IN_PROGRESS" {
+			t.Fatalf("move %d: status = %q, want IN_PROGRESS", i, p1Result.Status)
+		}
+		lastResult = p1Result
+	}
+
+	if lastResult.Status != "WON" || lastResult.WinnerID != "c4-one" {
+		t.Fatalf("final result = %+v, want a WON result for c4-one", lastResult)
+	}
+
+	// The balance update arrives asynchronously (produce -> economy
+	// consumer -> push), same as the other two games.
+	balEnv := readEnvelope(t, ctx, p1)
+	if balEnv.Type != schema.TypeBalanceUpdated {
+		t.Fatalf("got envelope type %q, want %q", balEnv.Type, schema.TypeBalanceUpdated)
+	}
+	var bal schema.BalanceUpdated
+	if err := json.Unmarshal(balEnv.Payload, &bal); err != nil {
+		t.Fatalf("unmarshal BalanceUpdated: %v", err)
+	}
+	if bal.PlayerID != "c4-one" || bal.Balance != connectfour.RewardForWin() {
+		t.Fatalf("unexpected BalanceUpdated: %+v", bal)
+	}
+
+	// The match is over: p2 trying to move should be rejected.
+	sendEnvelope(t, ctx, p2, schema.TypeConnectFourMove, schema.ConnectFourMoveRequest{SessionID: waiting.SessionID, Column: 2})
+	afterWinEnv := readEnvelope(t, ctx, p2)
+	if afterWinEnv.Type != schema.TypeError {
+		t.Fatalf("moving after a win: got envelope type %q, want %q", afterWinEnv.Type, schema.TypeError)
+	}
+}
+
+func TestConnectFourOpponentLeftOnDisconnect(t *testing.T) {
+	const broker = "localhost:9092"
+	tcpConn, err := net.DialTimeout("tcp", broker, 2*time.Second)
+	if err != nil {
+		t.Skipf("kafka not reachable at %s (is `docker compose up` running in deploy/compose?): %v", broker, err)
+	}
+	tcpConn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	gw := New([]string{broker}, nil)
+	if err := gw.EnsureTopic(ctx, "connect-four-sessions", ConnectFourSessionsPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.EnsureTopic(ctx, "economy-ledger", EconomyLedgerPartitions); err != nil {
+		t.Fatalf("ensure topic: %v", err)
+	}
+	if err := gw.StartEconomyLedger(ctx); err != nil {
+		t.Fatalf("start economy ledger: %v", err)
+	}
+
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	stayer := dial(t, srv)
+	defer stayer.CloseNow()
+	leaver := dial(t, srv)
+
+	sendEnvelope(t, ctx, stayer, schema.TypeCreateRoom, struct{}{})
+	var room schema.RoomCreated
+	if err := json.Unmarshal(readEnvelope(t, ctx, stayer).Payload, &room); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+
+	sendEnvelope(t, ctx, stayer, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "c4-stayer", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, stayer); env.Type != schema.TypeJoined {
+		t.Fatalf("stayer join: got %q, want JOINED", env.Type)
+	}
+	drainPresenceMessages(t, ctx, stayer, 1) // its own join announce
+
+	sendEnvelope(t, ctx, leaver, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "c4-leaver", RoomCode: room.RoomCode})
+	drainPresenceMessages(t, ctx, leaver, 1) // snapshot of stayer
+	if env := readEnvelope(t, ctx, leaver); env.Type != schema.TypeJoined {
+		t.Fatalf("leaver join: got %q, want JOINED", env.Type)
+	}
+	drainPresenceMessages(t, ctx, leaver, 1) // its own join announce
+	drainPresenceMessages(t, ctx, stayer, 1) // leaver's join announce, reaching stayer too
+
+	sendEnvelope(t, ctx, stayer, schema.TypeStartConnectFour, schema.StartConnectFourRequest{PlayerID: "c4-stayer"})
+	readEnvelope(t, ctx, stayer) // CONNECT_FOUR_WAITING
+
+	sendEnvelope(t, ctx, leaver, schema.TypeStartConnectFour, schema.StartConnectFourRequest{PlayerID: "c4-leaver"})
+	readEnvelope(t, ctx, leaver) // CONNECT_FOUR_STARTED for leaver
+	readEnvelope(t, ctx, stayer) // CONNECT_FOUR_STARTED for stayer
+
+	leaver.CloseNow()
+
+	// Disconnecting fires two independent things, in this order: the
+	// room-level PLAYER_LEFT broadcast (they were also room-mates,
+	// unrelated to the match) and then the Connect-Four-specific
+	// abandonment. Both are expected here.
+	roomLeftEnv := readEnvelope(t, ctx, stayer)
+	if roomLeftEnv.Type != schema.TypePlayerLeft {
+		t.Fatalf("got envelope type %q, want %q", roomLeftEnv.Type, schema.TypePlayerLeft)
+	}
+
+	leftEnv := readEnvelope(t, ctx, stayer)
+	if leftEnv.Type != schema.TypeConnectFourOpponentLeft {
+		t.Fatalf("got envelope type %q, want %q", leftEnv.Type, schema.TypeConnectFourOpponentLeft)
+	}
+
+	balEnv := readEnvelope(t, ctx, stayer)
+	if balEnv.Type != schema.TypeBalanceUpdated {
+		t.Fatalf("got envelope type %q, want %q", balEnv.Type, schema.TypeBalanceUpdated)
+	}
+	var bal schema.BalanceUpdated
+	if err := json.Unmarshal(balEnv.Payload, &bal); err != nil {
+		t.Fatalf("unmarshal BalanceUpdated: %v", err)
+	}
+	if bal.PlayerID != "c4-stayer" || bal.Balance != connectfour.RewardForWin() {
+		t.Fatalf("unexpected BalanceUpdated after opponent left: %+v", bal)
 	}
 }

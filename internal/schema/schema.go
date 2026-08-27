@@ -34,6 +34,13 @@ const (
 	TypeConnectionsStarted = "CONNECTIONS_STARTED"
 	TypeConnectionsGuess   = "CONNECTIONS_GUESS"
 	TypeConnectionsResult  = "CONNECTIONS_RESULT"
+
+	TypeStartConnectFour        = "START_CONNECT_FOUR"
+	TypeConnectFourWaiting      = "CONNECT_FOUR_WAITING"
+	TypeConnectFourStarted      = "CONNECT_FOUR_STARTED"
+	TypeConnectFourMove         = "CONNECT_FOUR_MOVE"
+	TypeConnectFourResult       = "CONNECT_FOUR_RESULT"
+	TypeConnectFourOpponentLeft = "CONNECT_FOUR_OPPONENT_LEFT"
 )
 
 // CurrencyCritterCoins is the (currently only) in-game currency type,
@@ -260,4 +267,84 @@ type ConnectionsSessionEvent struct {
 	PuzzleID     int    `json:"puzzle_id"`
 	MistakesUsed int    `json:"mistakes_used"`
 	Status       string `json:"status"`
+}
+
+// StartConnectFourRequest is the payload a client sends to start (or
+// join) a Connect Four match. Unlike the word game and Connections,
+// Connect Four IS room-scoped — two players are paired by both walking
+// to the same table in the same room — so the gateway pairs using the
+// connection's already-joined room code, not anything in this payload;
+// player_id is here only for shape parity with the other two START_*
+// requests.
+type StartConnectFourRequest struct {
+	PlayerID string `json:"player_id"`
+}
+
+// ConnectFourWaiting is the payload for a CONNECT_FOUR_WAITING response,
+// sent only to the first player at the table while a second is awaited.
+type ConnectFourWaiting struct {
+	SessionID string `json:"session_id"`
+}
+
+// ConnectFourBoard is the board shape sent to clients: Rows rows of Cols
+// cells each, 0 for empty or 1/2 for whichever player claimed it —
+// matching connectfour.Cell's own values, so the client doesn't need a
+// separate mapping table.
+type ConnectFourBoard [][]int
+
+// ConnectFourStarted is the payload for a CONNECT_FOUR_STARTED response,
+// sent to BOTH players once paired. YourSymbol is 1 or 2
+// (connectfour.PlayerOne/PlayerTwo) so each client knows which discs are
+// its own without comparing player ids itself.
+type ConnectFourStarted struct {
+	SessionID           string           `json:"session_id"`
+	Board               ConnectFourBoard `json:"board"`
+	YourSymbol          int              `json:"your_symbol"`
+	FirstTurnPlayerID   string           `json:"first_turn_player_id"`
+	OpponentID          string           `json:"opponent_id"`
+	OpponentDisplayName string           `json:"opponent_display_name,omitempty"`
+}
+
+// ConnectFourMoveRequest is the payload a client sends to drop a disc.
+type ConnectFourMoveRequest struct {
+	SessionID string `json:"session_id"`
+	Column    int    `json:"column"`
+}
+
+// ConnectFourResult is the payload for a CONNECT_FOUR_RESULT response,
+// sent to BOTH players after every move. The full board is resent each
+// time (not just the new disc) so a client can never drift out of sync
+// by missing one message.
+type ConnectFourResult struct {
+	SessionID           string           `json:"session_id"`
+	Column              int              `json:"column"`
+	Row                 int              `json:"row"`
+	Symbol              int              `json:"symbol"`
+	Board               ConnectFourBoard `json:"board"`
+	CurrentTurnPlayerID string           `json:"current_turn_player_id,omitempty"`
+	Status              string           `json:"status"` // IN_PROGRESS, WON, DRAW
+	WinnerID            string           `json:"winner_id,omitempty"`
+}
+
+// ConnectFourOpponentLeft is the payload for a
+// CONNECT_FOUR_OPPONENT_LEFT push, sent only to the remaining player
+// when their opponent disconnects mid-match.
+type ConnectFourOpponentLeft struct {
+	SessionID string `json:"session_id"`
+}
+
+// ConnectFourSessionEvent is the connect-four-sessions Kafka message
+// shape — an audit-log stream, same role as GameSessionEvent/
+// ConnectionsSessionEvent. Action distinguishes SESSION_STARTED (once
+// paired), MOVE_EVALUATED (one per move), and SESSION_COMPLETED (once,
+// on a win/draw/abandonment).
+type ConnectFourSessionEvent struct {
+	SessionID string `json:"session_id"`
+	RoomCode  string `json:"room_code"`
+	Player1ID string `json:"player1_id"`
+	Player2ID string `json:"player2_id,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+	Action    string `json:"action"`
+	Status    string `json:"status"`
+	WinnerID  string `json:"winner_id,omitempty"`
 }
