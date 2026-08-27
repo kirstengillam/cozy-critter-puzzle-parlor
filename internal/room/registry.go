@@ -56,6 +56,15 @@ func (reg *Registry) Exists(code string) bool {
 	return ok
 }
 
+// Delete reclaims a room code, e.g. once its last player disconnects, so
+// it stops existing (JoinRoom will reject it) and its code can be
+// generated again by a future Create instead of leaking forever.
+func (reg *Registry) Delete(code string) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	delete(reg.codes, code)
+}
+
 func randomCode() (string, error) {
 	raw := make([]byte, codeLength)
 	if _, err := rand.Read(raw); err != nil {

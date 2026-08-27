@@ -361,7 +361,9 @@ func (g *Gateway) handleWS(w http.ResponseWriter, r *http.Request) {
 	var joinedRoomCode, playerID string
 	defer func() {
 		if joinedRoomCode != "" && playerID != "" {
-			g.hub.leave(joinedRoomCode, playerID)
+			if g.hub.leave(joinedRoomCode, playerID) {
+				g.rooms.Delete(joinedRoomCode)
+			}
 			g.announceLeave(joinedRoomCode, playerID)
 		}
 		if playerID != "" {

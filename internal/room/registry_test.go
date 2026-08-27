@@ -24,6 +24,21 @@ func TestExistsUnknownCode(t *testing.T) {
 	}
 }
 
+func TestDeleteReclaimsCode(t *testing.T) {
+	reg := NewRegistry()
+
+	code, err := reg.Create()
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	reg.Delete(code)
+
+	if reg.Exists(code) {
+		t.Fatalf("Exists(%q) = true, want false after Delete", code)
+	}
+}
+
 func TestCreateCodesAreUnique(t *testing.T) {
 	reg := NewRegistry()
 	seen := make(map[string]bool)

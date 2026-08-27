@@ -116,11 +116,23 @@ func (h *hub) join(roomCode, playerID string, conn *safeConn) {
 	}
 }
 
-func (h *hub) leave(roomCode, playerID string) {
+// leave removes playerID from roomCode and reports whether that was the
+// room's last remaining connection, so the caller can reclaim the room
+// code (e.g. via room.Registry.Delete) instead of leaking it forever.
+func (h *hub) leave(roomCode, playerID string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.conns[roomCode], playerID)
 	delete(h.position[roomCode], playerID)
+
+	empty := len(h.conns[roomCode]) == 0
+	if empty {
+		// Drop the room's own now-empty maps too, rather than leaving
+		// zero-length entries sitting in conns/position forever.
+		delete(h.conns, roomCode)
+		delete(h.position, roomCode)
+	}
+	return empty
 }
 
 func (h *hub) currentPosition(roomCode, playerID string) position {

@@ -200,6 +200,57 @@ func TestPlayerLeftBroadcastOnDisconnect(t *testing.T) {
 	}
 }
 
+// TestRoomDeletedWhenLastPlayerLeaves verifies that a room code is
+// reclaimed once every player in it has disconnected (hub.leave +
+// room.Registry.Delete), rather than leaking in the registry forever.
+func TestRoomDeletedWhenLastPlayerLeaves(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	gw := New(nil, nil)
+	srv := httptest.NewServer(gw.Handler())
+	defer srv.Close()
+
+	player := dial(t, srv)
+
+	sendEnvelope(t, ctx, player, schema.TypeCreateRoom, struct{}{})
+	created := readEnvelope(t, ctx, player)
+	var room schema.RoomCreated
+	if err := json.Unmarshal(created.Payload, &room); err != nil {
+		t.Fatalf("unmarshal RoomCreated: %v", err)
+	}
+
+	sendEnvelope(t, ctx, player, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "solo", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, player); env.Type != schema.TypeJoined {
+		t.Fatalf("join: got %q, want JOINED", env.Type)
+	}
+
+	if !gw.rooms.Exists(room.RoomCode) {
+		t.Fatalf("room %q should still exist while its only player is connected", room.RoomCode)
+	}
+
+	player.CloseNow()
+
+	// Disconnect cleanup runs in the server's own goroutine for this
+	// connection, so poll briefly rather than assuming it's already done.
+	deadline := time.Now().Add(2 * time.Second)
+	for gw.rooms.Exists(room.RoomCode) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if gw.rooms.Exists(room.RoomCode) {
+		t.Fatalf("room %q still exists after its only player disconnected", room.RoomCode)
+	}
+
+	// The reclaimed code should also be rejected over the wire, not just
+	// internally.
+	latecomer := dial(t, srv)
+	defer latecomer.CloseNow()
+	sendEnvelope(t, ctx, latecomer, schema.TypeJoinRoom, schema.JoinRoomRequest{PlayerID: "latecomer", RoomCode: room.RoomCode})
+	if env := readEnvelope(t, ctx, latecomer); env.Type != schema.TypeError {
+		t.Fatalf("joining reclaimed room code: got %q, want %q", env.Type, schema.TypeError)
+	}
+}
+
 func TestMovementBroadcast(t *testing.T) {
 	const broker = "localhost:9092"
 
