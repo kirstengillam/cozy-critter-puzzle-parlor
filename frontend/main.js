@@ -1,4 +1,5 @@
 import {
+  CRITTER_MANIFEST,
   DEFAULT_CRITTER,
   animKey,
   createCritterSprite,
@@ -92,6 +93,40 @@ function currentDisplayName() {
   return displayNameInputEl.value.trim() || fallbackDisplayName;
 }
 
+// Builds one clickable swatch per CRITTER_MANIFEST color, each showing
+// that critter's own sitting-sheet frame 0 (a 320x64 5-frame strip, so a
+// 32px-tall swatch needs the sheet at half size — 160x32 — to land frame
+// 0 exactly in the button's top-left corner via background-position 0 0).
+const critterPickerEl = document.getElementById("critter-picker");
+let selectedCritter = DEFAULT_CRITTER;
+
+function currentCritter() {
+  return selectedCritter;
+}
+
+function selectCritter(critter) {
+  selectedCritter = critter;
+  for (const btn of critterPickerEl.children) {
+    btn.classList.toggle("selected", btn.dataset.critter === critter);
+  }
+}
+
+function buildCritterPicker() {
+  for (const critter of Object.keys(CRITTER_MANIFEST)) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "critter-option";
+    btn.dataset.critter = critter;
+    btn.title = critter;
+    btn.setAttribute("role", "radio");
+    btn.style.setProperty("--critter-swatch", `url(${CRITTER_MANIFEST[critter].sitting.path})`);
+    btn.addEventListener("click", () => selectCritter(critter));
+    critterPickerEl.appendChild(btn);
+  }
+  selectCritter(selectedCritter);
+}
+buildCritterPicker();
+
 const roomCodeInput = document.getElementById("room-code-input");
 const roomEl = document.getElementById("room");
 const chatLogEl = document.getElementById("chat-log");
@@ -141,7 +176,12 @@ function handleMessage(event) {
   switch (env.type) {
     case "ROOM_CREATED":
       roomCodeInput.value = env.payload.room_code;
-      send("JOIN_ROOM", { player_id: playerId, room_code: env.payload.room_code, display_name: currentDisplayName() });
+      send("JOIN_ROOM", {
+        player_id: playerId,
+        room_code: env.payload.room_code,
+        display_name: currentDisplayName(),
+        critter_type: currentCritter(),
+      });
       break;
     case "JOINED":
       roomCode = env.payload.room_code;
@@ -267,14 +307,15 @@ function onPlayerMoved(evt) {
 
   let entry = sprites[evt.player_id];
   if (!entry) {
+    const critter = evt.critter_type || DEFAULT_CRITTER;
     const start = cellCenter(evt.current_x, evt.current_y);
-    const image = createCritterSprite(scene, DEFAULT_CRITTER, start.x, start.y);
+    const image = createCritterSprite(scene, critter, start.x, start.y);
     image.setScale(CRITTER_SCALE);
     const name = evt.player_id === playerId ? currentDisplayName() : evt.display_name || evt.player_id.replace(/^player_/, "");
     const label = scene.add
       .text(start.x, start.y + LABEL_OFFSET, name, { fontSize: "9px", color: "#ffffff" })
       .setOrigin(0.5, 0);
-    entry = { image, label };
+    entry = { image, label, critter };
     sprites[evt.player_id] = entry;
   }
 
@@ -286,7 +327,7 @@ function onPlayerMoved(evt) {
   if (distance > 0) {
     // Sheet faces right by default; flip to face the direction of travel.
     if (dx !== 0) entry.image.setFlipX(dx < 0);
-    entry.image.play(animKey(DEFAULT_CRITTER, "walking"), true);
+    entry.image.play(animKey(entry.critter, "walking"), true);
 
     const duration = (distance / GRID_SIZE) * MOVE_MS_PER_CELL;
     scene.tweens.add({
@@ -294,7 +335,7 @@ function onPlayerMoved(evt) {
       x: target.x,
       y: target.y,
       duration,
-      onComplete: () => entry.image.play(animKey(DEFAULT_CRITTER, "sitting"), true),
+      onComplete: () => entry.image.play(animKey(entry.critter, "sitting"), true),
     });
     scene.tweens.add({
       targets: entry.label,
@@ -684,7 +725,12 @@ document.getElementById("create-room").addEventListener("click", () => send("CRE
 document.getElementById("join-room").addEventListener("click", () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (!code) return;
-  send("JOIN_ROOM", { player_id: playerId, room_code: code, display_name: currentDisplayName() });
+  send("JOIN_ROOM", {
+    player_id: playerId,
+    room_code: code,
+    display_name: currentDisplayName(),
+    critter_type: currentCritter(),
+  });
 });
 
 function sendChat() {

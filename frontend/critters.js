@@ -2,28 +2,43 @@
 // Collective — see frontend/assets/pixel-cats/LICENSE-14collective.txt)
 // replaces the earlier placeholder-shape approach.
 //
-// Only "yellow" is wired up for now: it's the only one of the 5
-// purchased colors with a complete, cleanly-gridded animation set for
-// all of idle/walking/running/sitting/loaf/licking/jumping (the other
-// four are mostly a single static reference pose per action, plus
-// Sitting and — except grey — Licking, which are clean everywhere).
-// Adding another color later is just another entry here; the
-// loading/animation code below is generic.
+// All 5 purchased colors have walking + sitting wired up. Each color's
+// source sheets only ship idle/running/loaf/licking/jumping as a single
+// static reference pose (or, for yellow, a cleanly-gridded set that
+// isn't used here yet) — walking/sitting are the only actions with a
+// full animation for every color.
+//
+// The "*-scaled.png" sheets are generated (not hand-drawn): the shipped
+// source art draws each cat in only ~25-28px of a 64x64 tile, which
+// renders small and low-detail in game. Regenerate them if the source
+// files under a color's unclothed/ folder change — see
+// frontend/assets/pixel-cats/generate-scaled-sheets.py.
 export const FRAME_SIZE = 64;
 
 export const CRITTER_MANIFEST = {
   yellow: {
-    idle: { frameCount: 12, frameRate: 6, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/idle.png" },
-    walking: { frameCount: 8, frameRate: 10, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/walking.png" },
-    running: { frameCount: 4, frameRate: 12, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/running.png" },
-    sitting: { frameCount: 5, frameRate: 6, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/sitting.png" },
-    loaf: { frameCount: 9, frameRate: 6, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/loaf.png" },
-    licking: { frameCount: 15, frameRate: 10, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/licking.png" },
-    jumping: { frameCount: 7, frameRate: 12, repeat: 0, path: "assets/pixel-cats/yellow/unclothed/jumping.png" },
+    walking: { frameCount: 8, frameRate: 10, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/walking-scaled.png" },
+    sitting: { frameCount: 5, frameRate: 6, repeat: -1, path: "assets/pixel-cats/yellow/unclothed/sitting-scaled.png" },
   },
+  siamese: {
+    walking: { frameCount: 8, frameRate: 6, repeat: -1, path: "assets/pixel-cats/siamese/unclothed/walking-scaled.png" },
+    sitting: { frameCount: 5, frameRate: 4, repeat: -1, path: "assets/pixel-cats/siamese/unclothed/sitting-scaled.png" },
+  },
+  pinkie: {
+    walking: { frameCount: 8, frameRate: 6, repeat: -1, path: "assets/pixel-cats/pinkie/unclothed/walking-scaled.png" },
+    sitting: { frameCount: 5, frameRate: 4, repeat: -1, path: "assets/pixel-cats/pinkie/unclothed/sitting-scaled.png" },
+  },
+  grey: {
+    walking: { frameCount: 8, frameRate: 6, repeat: -1, path: "assets/pixel-cats/grey/unclothed/walking-scaled.png" },
+    sitting: { frameCount: 5, frameRate: 4, repeat: -1, path: "assets/pixel-cats/grey/unclothed/sitting-scaled.png" },
+  },
+  black: {
+    walking: { frameCount: 8, frameRate: 6, repeat: -1, path: "assets/pixel-cats/black/unclothed/walking-scaled.png" },
+    sitting: { frameCount: 5, frameRate: 4, repeat: -1, path: "assets/pixel-cats/black/unclothed/sitting-scaled.png" },
+  }
 };
 
-export const DEFAULT_CRITTER = "yellow";
+export const DEFAULT_CRITTER = "grey";
 
 function textureKey(critter, action) {
   return `critter_${critter}_${action}`;
@@ -61,7 +76,7 @@ export function registerCritterAnimations(scene) {
 
 // Creates a sprite for critter at (x, y), already playing its idle animation.
 export function createCritterSprite(scene, critter, x, y) {
-  const sprite = scene.add.sprite(x, y, textureKey(critter, "idle"));
-  sprite.play(animKey(critter, "idle"));
+  const sprite = scene.add.sprite(x, y, textureKey(critter, "sitting"));
+  sprite.play(animKey(critter, "sitting"));
   return sprite;
 }

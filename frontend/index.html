@@ -5,7 +5,15 @@
   <title>Cozy Critter Puzzle Parlor</title>
   <style>
     body { font-family: sans-serif; background: #1c1c26; color: #eee; }
-    #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+    #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
+    #critter-picker { display: flex; gap: 4px; }
+    .critter-option {
+      width: 32px; height: 32px; padding: 0; border: 2px solid transparent; border-radius: 4px;
+      background-color: #14141c; cursor: pointer;
+      background-image: var(--critter-swatch); background-repeat: no-repeat;
+      background-position: 0 0; background-size: 160px 32px; image-rendering: pixelated;
+    }
+    .critter-option.selected { border-color: #e8a33d; }
     #play-area { display: flex; gap: 1.5rem; align-items: flex-start; }
     #room { display: none; }
     #status { font-size: 0.9rem; color: #aaa; }
@@ -91,6 +99,7 @@
 <body>
   <div id="lobby">
     <input id="display-name-input" placeholder="your name" maxlength="16" />
+    <div id="critter-picker" role="radiogroup" aria-label="choose your critter"></div>
     <button id="create-room">Create Room</button>
     <input id="room-code-input" placeholder="room code" maxlength="6" />
     <button id="join-room">Join Room</button>

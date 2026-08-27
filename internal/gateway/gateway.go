@@ -42,6 +42,44 @@ const EconomyLedgerPartitions = 6
 const ConnectionsSessionsPartitions = 6
 const ConnectFourSessionsPartitions = 6
 
+// defaultCritterType is used whenever a player hasn't chosen (or sent an
+// invalid) critter type — must match frontend/critters.js's
+// DEFAULT_CRITTER.
+const defaultCritterType = "grey"
+
+// validCritterTypes mirrors the colors defined in frontend/critters.js's
+// CRITTER_MANIFEST — kept as an explicit allowlist here (rather than
+// trusting whatever a client sends) so a broken or malicious client can't
+// stick other players' clients with an arbitrary texture key.
+var validCritterTypes = map[string]bool{
+	"yellow":  true,
+	"siamese": true,
+	"pinkie":  true,
+	"grey":    true,
+	"black":   true,
+}
+
+// normalizeCritterType returns s if it's a known critter type, or "" for
+// anything else (including empty) — callers pass that on to
+// hub.setCritterType, whose empty-value no-op leaves any previously
+// chosen critter in place instead of clobbering it with garbage.
+func normalizeCritterType(s string) string {
+	if validCritterTypes[s] {
+		return s
+	}
+	return ""
+}
+
+// critterTypeOrDefault fills in defaultCritterType for a player who
+// never successfully set one, so every PlayerPositionEvent carries a
+// renderable critter type.
+func critterTypeOrDefault(critterType string) string {
+	if critterType == "" {
+		return defaultCritterType
+	}
+	return critterType
+}
+
 type Gateway struct {
 	brokers                  []string
 	allowedOrigins           []string
@@ -463,6 +501,7 @@ func (g *Gateway) handleJoinRoom(ctx context.Context, conn *safeConn, payload js
 	g.hub.join(req.RoomCode, req.PlayerID, conn)
 	g.hub.registerPlayer(req.PlayerID, conn)
 	g.hub.setDisplayName(req.PlayerID, req.DisplayName)
+	g.hub.setCritterType(req.PlayerID, normalizeCritterType(req.CritterType))
 
 	// Bring the joiner up to speed on everyone already in the room before
 	// telling them they've joined, so their client has sprites for
@@ -488,6 +527,7 @@ func (g *Gateway) sendRoomSnapshot(ctx context.Context, conn *safeConn, roomCode
 		evt := schema.PlayerPositionEvent{
 			PlayerID:    id,
 			DisplayName: g.hub.displayNameFor(id),
+			CritterType: critterTypeOrDefault(g.hub.critterTypeFor(id)),
 			RoomID:      roomCode,
 			Action:      "MOVE",
 			CurrentX:    pos.X,
@@ -510,6 +550,7 @@ func (g *Gateway) announceJoin(ctx context.Context, roomCode, playerID string) {
 		Timestamp:   time.Now().UnixMilli(),
 		PlayerID:    playerID,
 		DisplayName: g.hub.displayNameFor(playerID),
+		CritterType: critterTypeOrDefault(g.hub.critterTypeFor(playerID)),
 		RoomID:      roomCode,
 		Action:      "JOIN",
 		CurrentX:    pos.X,
@@ -559,6 +600,7 @@ func (g *Gateway) handleMove(ctx context.Context, conn *safeConn, roomCode, play
 		Timestamp:       time.Now().UnixMilli(),
 		PlayerID:        playerID,
 		DisplayName:     g.hub.displayNameFor(playerID),
+		CritterType:     critterTypeOrDefault(g.hub.critterTypeFor(playerID)),
 		RoomID:          roomCode,
 		Action:          "MOVE",
 		CurrentX:        current.X,

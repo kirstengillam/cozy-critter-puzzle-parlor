@@ -52,6 +52,7 @@ type JoinRoomRequest struct {
 	PlayerID    string `json:"player_id"`
 	RoomCode    string `json:"room_code"`
 	DisplayName string `json:"display_name,omitempty"`
+	CritterType string `json:"critter_type,omitempty"`
 }
 
 // RoomCreated is the payload for a ROOM_CREATED response.
@@ -95,6 +96,7 @@ type PlayerPositionEvent struct {
 	Timestamp       int64  `json:"timestamp"`
 	PlayerID        string `json:"player_id"`
 	DisplayName     string `json:"display_name,omitempty"`
+	CritterType     string `json:"critter_type,omitempty"`
 	RoomID          string `json:"room_id"`
 	Action          string `json:"action"`
 	CurrentX        int    `json:"current_x"`

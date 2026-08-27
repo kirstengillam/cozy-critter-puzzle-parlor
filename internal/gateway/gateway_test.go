@@ -108,6 +108,66 @@ func TestCreateAndJoinRoom(t *testing.T) {
 	}
 }
 
+// TestJoinRoomCritterType covers normalizeCritterType/critterTypeOrDefault
+// via the real JOIN_ROOM path: a chosen critter type is echoed back in the
+// join announcement, an omitted one falls back to defaultCritterType, and
+// an invalid one is treated the same as omitted rather than passed
+// through verbatim (a broken/malicious client shouldn't be able to stick
+// other players' clients with an arbitrary texture key).
+func TestJoinRoomCritterType(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cases := []struct {
+		name        string
+		sentCritter string
+		wantCritter string
+	}{
+		{"honors a valid choice", "siamese", "siamese"},
+		{"defaults when omitted", "", defaultCritterType},
+		{"defaults when invalid", "not-a-real-critter", defaultCritterType},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := New(nil, nil)
+			srv := httptest.NewServer(gw.Handler())
+			defer srv.Close()
+
+			conn := dial(t, srv)
+			defer conn.CloseNow()
+
+			sendEnvelope(t, ctx, conn, schema.TypeCreateRoom, struct{}{})
+			created := readEnvelope(t, ctx, conn)
+			var room schema.RoomCreated
+			if err := json.Unmarshal(created.Payload, &room); err != nil {
+				t.Fatalf("unmarshal RoomCreated: %v", err)
+			}
+
+			sendEnvelope(t, ctx, conn, schema.TypeJoinRoom, schema.JoinRoomRequest{
+				PlayerID:    "player_critter_1",
+				RoomCode:    room.RoomCode,
+				CritterType: tc.sentCritter,
+			})
+			if env := readEnvelope(t, ctx, conn); env.Type != schema.TypeJoined {
+				t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypeJoined)
+			}
+
+			env := readEnvelope(t, ctx, conn)
+			if env.Type != schema.TypePlayerMoved {
+				t.Fatalf("got envelope type %q, want %q", env.Type, schema.TypePlayerMoved)
+			}
+			var evt schema.PlayerPositionEvent
+			if err := json.Unmarshal(env.Payload, &evt); err != nil {
+				t.Fatalf("unmarshal PlayerPositionEvent: %v", err)
+			}
+			if evt.CritterType != tc.wantCritter {
+				t.Fatalf("got critter_type %q, want %q", evt.CritterType, tc.wantCritter)
+			}
+		})
+	}
+}
+
 func TestJoinUnknownRoomCode(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

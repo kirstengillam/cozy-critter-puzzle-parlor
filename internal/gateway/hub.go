@@ -39,6 +39,7 @@ type hub struct {
 	position    map[string]map[string]position  // room code -> player id -> last position
 	playerConns map[string]*safeConn            // player id -> conn, independent of room
 	displayName map[string]string               // player id -> chosen display name, independent of room
+	critterType map[string]string               // player id -> chosen critter type, independent of room
 }
 
 func newHub() *hub {
@@ -47,6 +48,7 @@ func newHub() *hub {
 		position:    make(map[string]map[string]position),
 		playerConns: make(map[string]*safeConn),
 		displayName: make(map[string]string),
+		critterType: make(map[string]string),
 	}
 }
 
@@ -70,6 +72,28 @@ func (h *hub) displayNameFor(playerID string) string {
 	return h.displayName[playerID]
 }
 
+// setCritterType records the player-chosen critter sprite sent with
+// JOIN_ROOM. No-ops on an empty/invalid value (see normalizeCritterType)
+// so a client that doesn't send one — or a reconnect that races a fresh
+// pick — doesn't clobber a previously chosen critter. Independent of
+// room membership, like displayName.
+func (h *hub) setCritterType(playerID, critterType string) {
+	if critterType == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.critterType[playerID] = critterType
+}
+
+// critterTypeFor returns playerID's chosen critter type, or "" if none
+// was ever set — callers fall back to a default critter.
+func (h *hub) critterTypeFor(playerID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.critterType[playerID]
+}
+
 // registerPlayer associates playerID with conn for features that route
 // to a player directly, independent of room membership (e.g. the word
 // game and its economy payouts, neither of which are room-scoped).
@@ -84,6 +108,7 @@ func (h *hub) unregisterPlayer(playerID string) {
 	defer h.mu.Unlock()
 	delete(h.playerConns, playerID)
 	delete(h.displayName, playerID)
+	delete(h.critterType, playerID)
 }
 
 // sendToPlayer sends data to whichever connection last registered as
