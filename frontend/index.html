@@ -2,35 +2,179 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Cozy Critter Puzzle Parlor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Quicksand:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
   <style>
-    body { font-family: sans-serif; background: #1c1c26; color: #eee; }
-    #lobby { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; }
-    #critter-picker { display: flex; gap: 4px; }
-    .critter-option {
-      width: 32px; height: 32px; padding: 0; border: 2px solid transparent; border-radius: 4px;
-      background-color: #14141c; cursor: pointer;
-      background-image: var(--critter-swatch); background-repeat: no-repeat;
-      background-position: 0 0; background-size: 160px 32px; image-rendering: pixelated;
-    }
-    .critter-option.selected { border-color: #e8a33d; }
-    #play-area { display: flex; gap: 1.5rem; align-items: flex-start; }
-    #room { display: none; }
-    #status { font-size: 0.9rem; color: #aaa; }
-    #balance { font-size: 0.9rem; color: #e8a33d; }
-    #chat { max-width: 480px; margin-top: 0.5rem; }
-    #chat-log { height: 120px; overflow-y: auto; background: #14141c; padding: 0.4rem; font-size: 0.85rem; }
-    #chat-log p { margin: 0 0 0.2rem 0; }
-    #chat-log p.rejected { color: #d98a8a; font-style: italic; }
-    #chat-input { width: 360px; }
+    * { box-sizing: border-box; }
+    body { font-family: Quicksand, system-ui, sans-serif; background: #fbe8d3; color: #4a3426; margin: 0; }
+    #play-area { width: 100%; }
 
-    #wordgame { display: none; }
+    /* Lobby screen: a full-viewport, flex-centered card — width: 100%
+       with a max-width cap (not a fixed px width) so it's fluid down to
+       any mobile size, matching the room view's pattern below. */
+    #lobby-screen {
+      min-height: 100vh; width: 100%; box-sizing: border-box;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .lobby-logo { text-align: center; margin-bottom: 22px; }
+    .lobby-logo .lobby-title { font-family: Fredoka, sans-serif; font-weight: 700; font-size: 26px; color: #b97a2a; }
+    .lobby-logo .lobby-sub { margin-top: 8px; font-size: 14.5px; color: #8a6a52; font-weight: 500; }
+
+    #lobby {
+      width: 100%; max-width: 460px; background: #fff6ea; border-radius: 28px;
+      border: 3px solid #e8c9a0; box-shadow: 0 10px 0 #e8c9a0, 0 18px 30px rgba(138, 90, 26, 0.18);
+      padding: 44px 40px 40px; display: flex; flex-direction: column; gap: 24px;
+    }
+    #lobby .field { display: flex; flex-direction: column; gap: 7px; }
+    #lobby .field label { font-family: Fredoka, sans-serif; font-size: 13px; font-weight: 600; color: #b08a68; }
+    #lobby input {
+      font-family: inherit; font-size: 16px; font-weight: 600; padding: 13px 16px; width: 100%;
+      background: #fffaf3; border: 2px solid #e8c9a0; border-radius: 14px; color: #4a3426; outline: none;
+    }
+    #lobby input::placeholder { color: #c8ac8e; font-weight: 500; }
+
+    #critter-picker { display: flex; gap: 9px; justify-content: center; flex-wrap: wrap; }
+    .critter-option {
+      width: 48px; height: 48px; padding: 0; border: 2px solid #e8c9a0; border-radius: 16px;
+      background-color: #fffaf3; cursor: pointer;
+      background-image: var(--critter-swatch); background-repeat: no-repeat;
+      background-position: 0 0; background-size: 240px 48px; image-rendering: pixelated;
+    }
+    .critter-option.selected { border-color: #e8a33d; box-shadow: 0 0 0 3px #fce7c8; }
+
+    .lobby-row { display: flex; gap: 10px; }
+    .lobby-row .field { flex: 1; min-width: 0; }
+
+    .btn {
+      font-family: Fredoka, sans-serif; font-weight: 600; font-size: 16.5px;
+      padding: 14px 18px; border: none; border-radius: 16px; cursor: pointer; text-align: center;
+    }
+    .btn-primary { background: #e8a33d; color: #fff8ec; box-shadow: 0 4px 0 #b97a2a; }
+    .btn-secondary { background: #eee0cc; color: #6a4e34; box-shadow: 0 4px 0 #d8c2a0; }
+    .btn-block { width: 100%; }
+
+    .lobby-divider {
+      display: flex; align-items: center; gap: 10px; color: #c8ac8e;
+      font-family: Fredoka, sans-serif; font-weight: 600; font-size: 12px;
+      text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .lobby-divider::before, .lobby-divider::after { content: ""; flex: 1; height: 2px; background: #eddcc0; }
+
+    .lobby-play-row { display: flex; gap: 10px; }
+    .lobby-play-row .btn { flex: 1; }
+
+    .lobby-footer {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+      font-size: 13px; color: #b08a68; font-weight: 600; padding-top: 8px; border-top: 2px dashed #eddcc0;
+    }
+
+    @media (max-width: 820px) {
+      #lobby-screen { padding: 0; justify-content: flex-start; }
+      .lobby-logo { padding: 44px 24px 20px; margin-bottom: 0; }
+      /* Flush to the screen edges, rounded top corners only — same
+         bottom-sheet treatment as the in-room chat panel. */
+      #lobby {
+        max-width: none; flex: 1; border-radius: 28px 28px 0 0; border-bottom: none;
+        box-shadow: none; padding: 26px 22px;
+      }
+    }
+
+    /* Once a room is joined, the room view replaces the lobby screen as
+       its own full screen — each mockup artboard was a full screen,
+       background included, not a card floating on the page. Toggled by
+       main.js adding/removing this class on <body>. */
+    body.in-room #lobby-screen {
+      display: none;
+    }
+
+    #room {
+      display: none;
+      min-height: 100vh;
+      width: 100%;
+      color: #4a3426;
+      background: #fbe8d3;
+    }
+    .room-topbar {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+      max-width: 1200px; margin: 0 auto;
+      padding: 14px 22px; background: #fff6ea; border-bottom: 3px solid #e8c9a0;
+    }
+    .room-topbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .room-title { font-family: Fredoka, sans-serif; font-weight: 700; font-size: 15px; color: #b97a2a; }
+    .room-code-chip { font-size: 13px; font-weight: 600; color: #8a6a52; background: #fbe8d3; border-radius: 10px; padding: 4px 10px; }
+    .coins-chip { display: flex; align-items: center; gap: 6px; color: #b97a2a; font-weight: 700; font-size: 13px; }
+    .coins-chip svg { width: 14px; height: 14px; }
+
+    .room-main { display: flex; gap: 18px; padding: 18px; align-items: flex-start; max-width: 1200px; margin: 0 auto; }
+
+    .game-frame {
+      flex: 1 1 640px; min-width: 0;
+      border-radius: 22px; border: 3px solid #e8c9a0; box-shadow: 0 6px 0 #e8c9a0;
+      background: #fff6ea; overflow: hidden; position: relative;
+    }
+    /* The Phaser canvas mounts inside #game. Its internal drawing buffer
+       stays fixed at 1024x576 (512x288 game space * ZOOM) regardless of
+       viewport — this just lets the browser display it at any fluid
+       width, aspect-ratio-locked, so it shrinks to fit mobile too. */
+    #game { width: 100%; aspect-ratio: 1024 / 576; line-height: 0; }
+    #game canvas { width: 100% !important; height: 100% !important; display: block; image-rendering: pixelated; }
+
+    .game-panel-host { display: none; flex-direction: column; height: 100%; }
+    .game-panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; border-bottom: 2px solid #eddcc0;
+    }
+    .game-panel-header h2 { margin: 0; font-family: Fredoka, sans-serif; font-weight: 700; font-size: 15px; color: #b97a2a; }
+    .back-btn {
+      font-family: Fredoka, sans-serif; font-weight: 600; font-size: 12.5px;
+      color: #8a6a52; background: #eee0cc; border: none; border-radius: 12px; padding: 6px 13px; cursor: pointer;
+    }
+    .game-panel-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; overflow: auto; }
+
+    .chat-panel {
+      flex: 1 1 320px; min-width: 240px; max-width: 380px; max-height: 520px;
+      display: flex; flex-direction: column;
+      border-radius: 22px; border: 3px solid #e8c9a0; box-shadow: 0 6px 0 #e8c9a0;
+      background: #fff6ea; overflow: hidden;
+    }
+    .chat-header { padding: 10px 14px; border-bottom: 2px solid #eddcc0; font-family: Fredoka, sans-serif; font-weight: 600; font-size: 13px; color: #b08a68; }
+    #chat-log { flex: 1; overflow-y: auto; padding: 12px 14px; min-height: 120px; }
+    #chat-log p { margin: 0 0 8px 0; font-size: 13.5px; font-weight: 500; line-height: 1.4; color: #4a3426; }
+    #chat-log p.rejected { color: #b5524a; font-style: italic; }
+    .chat-input-row { display: flex; gap: 6px; padding: 12px; border-top: 2px solid #eddcc0; }
+    #chat-input {
+      flex: 1; min-width: 0; font-family: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 12px;
+      background: #fffaf3; border: 2px solid #e8c9a0; border-radius: 13px; color: #4a3426; outline: none;
+    }
+    .send-btn {
+      width: 38px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: 13px;
+      background: #e8a33d; border: none; box-shadow: 0 3px 0 #b97a2a; color: #fff8ec; cursor: pointer;
+    }
+    .send-btn svg { width: 14px; height: 14px; }
+
+    @media (max-width: 820px) {
+      .room-main { flex-direction: column; padding: 12px; gap: 12px; }
+      /* .game-frame's flex-basis (640px) is a *width* hint for the
+         desktop side-by-side layout — in a column flex container that
+         same basis sizes its *height* instead, so it needs overriding
+         here rather than just letting flex-direction flip underneath it. */
+      .game-frame { flex: none; width: 100%; }
+      .chat-panel { flex: none; width: 100%; max-width: none; max-height: none; min-height: 260px; }
+    }
+
+    #wordgame, #connections, #connectfour { display: none; }
     #word-grid { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.75rem; }
     .word-row { display: flex; gap: 4px; }
     .tile {
       width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
-      font-size: 1.2rem; font-weight: bold; text-transform: uppercase;
-      background: #14141c; border: 1px solid #44445a;
+      font-size: 1.2rem; font-weight: bold; text-transform: uppercase; background: #14141c; border: 1px solid #44445a;
     }
     .tile.correct { background: #4a7a4a; border-color: #4a7a4a; }
     .tile.present { background: #b8a23a; border-color: #b8a23a; }
@@ -49,7 +193,7 @@
 
     #wordgame-status { margin-top: 0.5rem; font-size: 0.9rem; }
 
-    #connections { display: none; max-width: 320px; }
+    #connections { max-width: 320px; }
     #conn-solved { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
     .conn-solved-row {
       padding: 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold;
@@ -81,7 +225,7 @@
 
     #connections-status { margin-top: 0.5rem; font-size: 0.9rem; }
 
-    #connectfour { display: none; max-width: 300px; }
+    #connectfour { max-width: 300px; }
     #c4-board {
       display: flex; flex-direction: column; gap: 3px; margin-bottom: 0.5rem;
       background: #2b5aa8; padding: 6px; border-radius: 6px; width: fit-content;
@@ -97,24 +241,81 @@
   </style>
 </head>
 <body>
-  <div id="lobby">
-    <input id="display-name-input" placeholder="your name" maxlength="16" />
-    <div id="critter-picker" role="radiogroup" aria-label="choose your critter"></div>
-    <button id="create-room">Create Room</button>
-    <input id="room-code-input" placeholder="room code" maxlength="6" />
-    <button id="join-room">Join Room</button>
-    <button id="play-word-game">Play Word Game</button>
-    <button id="play-connections">Play Connections</button>
+  <div id="lobby-screen">
+    <div class="lobby-logo">
+      <div class="lobby-title">Cozy Critter Puzzle Parlor</div>
+      <div class="lobby-sub">pick a critter, grab a table, play something small together</div>
+    </div>
+    <div id="lobby">
+      <div class="field">
+        <label for="display-name-input">Your name</label>
+        <input id="display-name-input" placeholder="your name" maxlength="16" />
+      </div>
+
+      <div class="field">
+        <label>Choose your critter</label>
+        <div id="critter-picker" role="radiogroup" aria-label="choose your critter"></div>
+      </div>
+
+      <button id="create-room" type="button" class="btn btn-primary btn-block">Create Room</button>
+
+      <div class="lobby-divider">or join a room</div>
+      <div class="lobby-row">
+        <div class="field">
+          <label for="room-code-input">Room code</label>
+          <input id="room-code-input" placeholder="ABC123" maxlength="6" />
+        </div>
+        <button id="join-room" type="button" class="btn btn-secondary">Join Room</button>
+      </div>
+
+      <div class="lobby-divider">or play solo</div>
+      <div class="lobby-play-row">
+        <button id="play-word-game" type="button" class="btn btn-secondary">Word Game</button>
+        <button id="play-connections" type="button" class="btn btn-secondary">Connections</button>
+      </div>
+
+      <div class="lobby-footer">
+        <span id="status"></span>
+        <span class="coins-chip">
+          <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
+          Critter Coins: <span id="balance-amount">0</span>
+        </span>
+      </div>
+    </div>
   </div>
-  <p id="status"></p>
-  <p id="balance">Critter Coins: <span id="balance-amount">0</span></p>
   <div id="play-area">
     <div id="room">
-      <div id="game"></div>
-      <div id="chat">
-        <div id="chat-log"></div>
-        <input id="chat-input" placeholder="say something..." maxlength="200" />
-        <button id="chat-send">Send</button>
+      <div class="room-topbar">
+        <div class="room-topbar-left">
+          <span class="room-title">Cozy Critter Puzzle Parlor</span>
+          <span class="room-code-chip">Room <span id="room-code-label"></span></span>
+        </div>
+        <span class="coins-chip">
+          <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="2"/><circle cx="10" cy="10" r="4" stroke="currentColor" stroke-width="1.5"/></svg>
+          Critter Coins: <span id="room-balance-amount">0</span>
+        </span>
+      </div>
+      <div class="room-main">
+        <div class="game-frame">
+          <div id="game"></div>
+          <div id="game-panel-host" class="game-panel-host">
+            <div class="game-panel-header">
+              <h2 id="game-panel-title"></h2>
+              <button type="button" id="game-panel-back" class="back-btn">Back to Room</button>
+            </div>
+            <div id="game-panel-body" class="game-panel-body"></div>
+          </div>
+        </div>
+        <div class="chat-panel">
+          <div class="chat-header">Chat</div>
+          <div id="chat-log"></div>
+          <div class="chat-input-row">
+            <input id="chat-input" placeholder="say something..." maxlength="200" />
+            <button id="chat-send" type="button" class="send-btn">
+              <svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M17.5 2.5L2.5 8.75L9.375 11.25M17.5 2.5L11.25 17.5L9.375 11.25M17.5 2.5L9.375 11.25" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="wordgame">

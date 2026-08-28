@@ -129,6 +129,8 @@ buildCritterPicker();
 
 const roomCodeInput = document.getElementById("room-code-input");
 const roomEl = document.getElementById("room");
+const roomCodeLabelEl = document.getElementById("room-code-label");
+const roomBalanceAmountEl = document.getElementById("room-balance-amount");
 const chatLogEl = document.getElementById("chat-log");
 const chatInputEl = document.getElementById("chat-input");
 const balanceAmountEl = document.getElementById("balance-amount");
@@ -147,6 +149,61 @@ const connectionsStatusEl = document.getElementById("connections-status");
 const connectFourEl = document.getElementById("connectfour");
 const c4BoardEl = document.getElementById("c4-board");
 const c4StatusEl = document.getElementById("c4-status");
+
+// Each of wordgame/connections/connectfour normally lives in #play-area
+// (their "standalone" home, used for solo word game/Connections started
+// straight from the lobby bar before ever joining a room — untouched,
+// still unstyled pending the lobby's own redesign pass). Once in a room,
+// starting any of them instead moves that same element into the room's
+// game-frame in place of the Phaser canvas, so chat stays reachable the
+// whole time. Connect Four never has a standalone home — it's only ever
+// reachable by walking to a table inside a room.
+const playAreaEl = document.getElementById("play-area");
+const gameCanvasEl = document.getElementById("game");
+const gamePanelHostEl = document.getElementById("game-panel-host");
+const gamePanelTitleEl = document.getElementById("game-panel-title");
+const gamePanelBodyEl = document.getElementById("game-panel-body");
+const gamePanelBackEl = document.getElementById("game-panel-back");
+
+function showGamePanel(panelEl, title) {
+  panelEl.style.display = "block";
+  if (roomCode) {
+    gamePanelTitleEl.textContent = title;
+    // gamePanelBodyEl should only ever hold the one active panel — evict
+    // any other (hidden, but still DOM-attached) leftover from switching
+    // games before it accumulates stale children.
+    while (gamePanelBodyEl.firstElementChild && gamePanelBodyEl.firstElementChild !== panelEl) {
+      playAreaEl.appendChild(gamePanelBodyEl.firstElementChild);
+    }
+    gamePanelBodyEl.appendChild(panelEl);
+    gamePanelHostEl.style.display = "flex";
+    gameCanvasEl.style.display = "none";
+  } else {
+    playAreaEl.appendChild(panelEl);
+    // The lobby screen is a full min-height:100vh card (see index.html),
+    // so a solo game started from its buttons would otherwise render
+    // entirely below the fold with no visual hint it opened at all.
+    panelEl.scrollIntoView({ behavior: "instant", block: "start" });
+  }
+}
+
+// Hides whichever game is currently active and, if it was showing inside
+// the room's game-frame, moves it back out to its standalone home and
+// restores the room-scene canvas.
+function closeActiveGamePanel() {
+  wordGameSessionId = null;
+  wordgameEl.style.display = "none";
+  connectionsSessionId = null;
+  connectionsEl.style.display = "none";
+  closeConnectFour();
+
+  if (gamePanelBodyEl.firstElementChild) {
+    playAreaEl.appendChild(gamePanelBodyEl.firstElementChild);
+  }
+  gamePanelHostEl.style.display = "none";
+  gameCanvasEl.style.display = "";
+}
+gamePanelBackEl.addEventListener("click", closeActiveGamePanel);
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -186,7 +243,14 @@ function handleMessage(event) {
     case "JOINED":
       roomCode = env.payload.room_code;
       setStatus(`joined room ${roomCode} as ${currentDisplayName()}`);
+      roomCodeLabelEl.textContent = roomCode;
       roomEl.style.display = "block";
+      // The room view replaces the lobby as its own full screen (see
+      // index.html's body.in-room rules) rather than sitting as a card
+      // alongside it — matches the mockups, which were each a full
+      // screen, background included, not a component embedded in a
+      // larger page.
+      document.body.classList.add("in-room");
       break;
     case "PLAYER_MOVED":
       onPlayerMoved(env.payload);
@@ -227,6 +291,7 @@ function handleMessage(event) {
       break;
     case "CURRENCY_BALANCE_UPDATED":
       balanceAmountEl.textContent = env.payload.balance;
+      roomBalanceAmountEl.textContent = env.payload.balance;
       break;
     case "ERROR":
       setStatus(`error: ${env.payload.message}`);
@@ -465,7 +530,7 @@ function onGameStarted(payload) {
   wordgameStatusEl.textContent = "";
   buildWordGrid(wordGameMaxGuesses, wordGameWordLength);
   buildKeyboard();
-  wordgameEl.style.display = "block";
+  showGamePanel(wordgameEl, "Word Game");
 }
 
 function onGuessResult(payload) {
@@ -568,7 +633,7 @@ function onConnectionsStarted(payload) {
   buildConnectionsGrid(payload.words);
   renderConnectionsMistakes(0, payload.max_mistakes);
   renderConnectionsSelection();
-  connectionsEl.style.display = "block";
+  showGamePanel(connectionsEl, "Connections");
 }
 
 function submitConnectionsGuess() {
@@ -660,7 +725,7 @@ function onConnectFourWaiting(payload) {
     Array.from({ length: 6 }, () => Array(7).fill(0)),
   );
   c4StatusEl.textContent = "Waiting for an opponent to join...";
-  connectFourEl.style.display = "block";
+  showGamePanel(connectFourEl, "Connect Four");
 }
 
 function onConnectFourStarted(payload) {
@@ -678,7 +743,7 @@ function onConnectFourStarted(payload) {
   const yourColor = c4YourSymbol === 1 ? "red" : "yellow";
   const turn = c4CurrentTurn === playerId ? "your turn" : "their turn";
   c4StatusEl.textContent = `Playing against ${opponentName} — you're ${yourColor}, ${turn}.`;
-  connectFourEl.style.display = "block";
+  showGamePanel(connectFourEl, "Connect Four");
 }
 
 function onConnectFourResult(payload) {
@@ -786,12 +851,24 @@ new Phaser.Game({
         if (!roomCode) return;
         // pointer.x/y go through Phaser's scale-manager transform, which
         // can come back Infinity/NaN in some hosting contexts before it
-        // settles. event.offsetX/Y are canvas-relative straight from the
-        // browser and don't depend on that transform — but they're in
-        // rendered CSS pixels, which the ZOOM factor makes larger than the
-        // internal game coordinate space, so divide it back out.
-        const offsetX = (pointer.event?.offsetX ?? pointer.x) / ZOOM;
-        const offsetY = (pointer.event?.offsetY ?? pointer.y) / ZOOM;
+        // settles — so this maps the click itself, via the native DOM
+        // event and the canvas's own bounding box, instead. The canvas's
+        // drawing buffer is always GRID_COLS*GRID_SIZE x GRID_ROWS*
+        // GRID_SIZE (512x288) regardless of ZOOM — zoom is a display-size
+        // hint that index.html's `#game canvas { width: 100% }` already
+        // overrides so the canvas fits any container width (mobile
+        // included) — so mapping a click back to buffer pixels via
+        // getBoundingClientRect lands directly in the same coordinate
+        // space cellCenter()/GRID_SIZE already use, no ZOOM involved.
+        const nativeEvent = pointer.event;
+        if (!nativeEvent) return;
+        const canvasEl = this.sys.game.canvas;
+        const rect = canvasEl.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        const scaleX = canvasEl.width / rect.width;
+        const scaleY = canvasEl.height / rect.height;
+        const offsetX = (nativeEvent.clientX - rect.left) * scaleX;
+        const offsetY = (nativeEvent.clientY - rect.top) * scaleY;
         const targetX = Math.floor(offsetX / GRID_SIZE);
         const targetY = Math.floor(offsetY / GRID_SIZE);
         const table = findTableAt(targetX, targetY);
