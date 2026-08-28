@@ -169,7 +169,16 @@ resource "aws_iam_role" "gha_deploy" {
   name = "cozy-critter-gha-deploy"
 
   # Scoped to this repo's main branch only — a workflow run from a fork,
-  # a PR branch, or any other repo can't assume this role.
+  # a PR branch, or any other repo can't assume this role. The real
+  # scoping is repository/ref (StringEquals, exact) rather than sub:
+  # GitHub appends numeric owner/repo IDs to sub
+  # (repo:owner@id/name@id:ref:...) once an account or repo has ever been
+  # renamed, specifically so a renamed-away name can't inherit an old
+  # trust relationship — repository/ref stay plain strings regardless.
+  # AWS separately *requires* a sub (or job_workflow_ref) condition on
+  # any GitHub OIDC trust policy, so sub is here too (StringLike, with a
+  # wildcard tolerating that optional @id suffix) purely to satisfy that
+  # rule — repository/ref above is what's actually doing the scoping.
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -178,8 +187,12 @@ resource "aws_iam_role" "gha_deploy" {
       Principal = { Federated = data.aws_iam_openid_connect_provider.github.arn }
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          "token.actions.githubusercontent.com:sub" = "repo:kirstengillam/cozy-critter-puzzle-parlor:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:aud"        = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:repository" = "kirstengillam/cozy-critter-puzzle-parlor"
+          "token.actions.githubusercontent.com:ref"        = "refs/heads/main"
+        }
+        StringLike = {
+          "token.actions.githubusercontent.com:sub" = "repo:kirstengillam*/cozy-critter-puzzle-parlor*:ref:refs/heads/main"
         }
       }
     }]
