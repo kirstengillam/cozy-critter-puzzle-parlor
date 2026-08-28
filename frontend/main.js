@@ -862,15 +862,22 @@ new Phaser.Game({
         // space cellCenter()/GRID_SIZE already use, no ZOOM involved.
         const nativeEvent = pointer.event;
         if (!nativeEvent) return;
+        // On touch devices the native event can be a plain TouchEvent
+        // rather than a PointerEvent/MouseEvent — TouchEvent has no
+        // clientX/clientY of its own, only per-finger entries in
+        // .touches/.changedTouches, so pull from there when needed.
+        const point = "clientX" in nativeEvent ? nativeEvent : (nativeEvent.touches?.[0] ?? nativeEvent.changedTouches?.[0]);
+        if (!point) return;
         const canvasEl = this.sys.game.canvas;
         const rect = canvasEl.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) return;
         const scaleX = canvasEl.width / rect.width;
         const scaleY = canvasEl.height / rect.height;
-        const offsetX = (nativeEvent.clientX - rect.left) * scaleX;
-        const offsetY = (nativeEvent.clientY - rect.top) * scaleY;
+        const offsetX = (point.clientX - rect.left) * scaleX;
+        const offsetY = (point.clientY - rect.top) * scaleY;
         const targetX = Math.floor(offsetX / GRID_SIZE);
         const targetY = Math.floor(offsetY / GRID_SIZE);
+        if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return;
         const table = findTableAt(targetX, targetY);
         if (table) pendingGameTable = table;
         send("MOVE", { target_x: targetX, target_y: targetY, facing_direction: "NORTH" });

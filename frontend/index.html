@@ -123,8 +123,8 @@
        stays fixed at 1024x576 (512x288 game space * ZOOM) regardless of
        viewport — this just lets the browser display it at any fluid
        width, aspect-ratio-locked, so it shrinks to fit mobile too. */
-    #game { width: 100%; aspect-ratio: 1024 / 576; line-height: 0; }
-    #game canvas { width: 100% !important; height: 100% !important; display: block; image-rendering: pixelated; }
+    #game { width: 100%; aspect-ratio: 1024 / 576; line-height: 0; touch-action: none; }
+    #game canvas { width: 100% !important; height: 100% !important; display: block; image-rendering: pixelated; touch-action: none; }
 
     .game-panel-host { display: none; flex-direction: column; height: 100%; }
     .game-panel-header {
