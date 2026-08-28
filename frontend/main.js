@@ -394,6 +394,13 @@ function onPlayerMoved(evt) {
     if (dx !== 0) entry.image.setFlipX(dx < 0);
     entry.image.play(animKey(entry.critter, "walking"), true);
 
+    // A new PLAYER_MOVED can arrive before the previous tween finishes
+    // (e.g. a second tap mid-walk) — without killing the old tween first,
+    // both fight over entry.image.x/y every frame and the sprite ends up
+    // somewhere neither target intended.
+    scene.tweens.killTweensOf(entry.image);
+    scene.tweens.killTweensOf(entry.label);
+
     const duration = (distance / GRID_SIZE) * MOVE_MS_PER_CELL;
     scene.tweens.add({
       targets: entry.image,
@@ -879,7 +886,7 @@ new Phaser.Game({
         const targetY = Math.floor(offsetY / GRID_SIZE);
         if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return;
         const table = findTableAt(targetX, targetY);
-        if (table) pendingGameTable = table;
+        pendingGameTable = table;
         send("MOVE", { target_x: targetX, target_y: targetY, facing_direction: "NORTH" });
       });
     },
