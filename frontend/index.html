@@ -11,6 +11,11 @@
     rel="stylesheet"
   />
   <style>
+    /* No dark theme has been designed for this app yet — without this,
+       browsers apply dark-mode chrome to native form controls (buttons,
+       inputs) whenever the OS is in dark mode, clashing badly with the
+       light cozy-cottage palette everything else here is hand-styled in. */
+    :root { color-scheme: light; }
     * { box-sizing: border-box; }
     body { font-family: Quicksand, system-ui, sans-serif; background: #fbe8d3; color: #4a3426; margin: 0; }
     #play-area { width: 100%; }
@@ -174,22 +179,22 @@
     .word-row { display: flex; gap: 4px; }
     .tile {
       width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
-      font-size: 1.2rem; font-weight: bold; text-transform: uppercase; background: #14141c; border: 1px solid #44445a;
+      font-size: 1.2rem; font-weight: bold; text-transform: uppercase; background: #fffaf3; color: #2a2a2a; border: 2px solid #2a2a2a;
     }
-    .tile.correct { background: #4a7a4a; border-color: #4a7a4a; }
-    .tile.present { background: #b8a23a; border-color: #b8a23a; }
-    .tile.absent { background: #33333f; border-color: #33333f; }
+    .tile.correct { background: #4a7a4a; border-color: #4a7a4a; color: #fff8ec; }
+    .tile.present { background: #b8a23a; border-color: #b8a23a; color: #fff8ec; }
+    .tile.absent { background: #8a8580; border-color: #8a8580; color: #fff8ec; }
 
     #keyboard { display: flex; flex-direction: column; gap: 4px; }
     .kb-row { display: flex; gap: 4px; }
     .kb-key {
       min-width: 28px; padding: 6px 4px; font-size: 0.8rem; text-transform: uppercase;
-      background: #33333f; color: #eee; border: none; cursor: pointer;
+      background: #eee0cc; color: #6a4e34; border: none; cursor: pointer;
     }
     .kb-key.wide { min-width: 48px; }
-    .kb-key.correct { background: #4a7a4a; }
-    .kb-key.present { background: #b8a23a; }
-    .kb-key.absent { background: #222229; color: #777; }
+    .kb-key.correct { background: #4a7a4a; color: #fff8ec; }
+    .kb-key.present { background: #b8a23a; color: #fff8ec; }
+    .kb-key.absent { background: #8a8580; color: #fff8ec; }
 
     #wordgame-status { margin-top: 0.5rem; font-size: 0.9rem; }
 
@@ -197,7 +202,7 @@
     #conn-solved { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
     .conn-solved-row {
       padding: 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold;
-      text-align: center; color: #14141c;
+      text-align: center; color: #2a2a2a;
     }
     .conn-solved-row .conn-solved-name { display: block; text-transform: uppercase; }
     .conn-solved-row .conn-solved-members { font-weight: normal; text-transform: uppercase; }
@@ -210,17 +215,17 @@
     #conn-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 0.75rem; }
     .conn-tile {
       padding: 0.6rem 0.2rem; font-size: 0.75rem; font-weight: bold; text-transform: uppercase;
-      background: #14141c; color: #eee; border: 1px solid #44445a; cursor: pointer;
+      background: #fffaf3; color: #2a2a2a; border: 2px solid #2a2a2a; cursor: pointer;
       text-align: center;
     }
-    .conn-tile.selected { background: #44445a; border-color: #8888a8; }
+    .conn-tile.selected { background: #eee0cc; border-color: #e8a33d; }
     .conn-tile.shake { animation: conn-shake 0.3s; border-color: #d98a8a; }
     @keyframes conn-shake {
       25% { transform: translateX(-4px); } 75% { transform: translateX(4px); }
     }
 
     #conn-mistakes { font-size: 0.85rem; margin-bottom: 0.5rem; }
-    .conn-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #44445a; margin-right: 4px; }
+    .conn-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #e8c9a0; margin-right: 4px; }
     .conn-dot.used { background: #d98a8a; }
 
     #connections-status { margin-top: 0.5rem; font-size: 0.9rem; }
