@@ -9,8 +9,10 @@ import {
 
 const WS_PORT = 8080;
 const GRID_SIZE = 32;
-const GRID_COLS = 16;
-const GRID_ROWS = 9;
+// 12x11 keeps the room close to square (matches the approved "Parlor"
+// mockup's ~1.1:1 frame) instead of the old 16:9 wide rectangle.
+const GRID_COLS = 12;
+const GRID_ROWS = 11;
 // Per-cell move time, not a flat per-move duration — there's no
 // pathfinding, so a click can land many cells away in a straight line,
 // and a flat duration made short hops crawl while long hops teleported.
@@ -44,19 +46,15 @@ const BUBBLE_CORNER_RADIUS = 6;
 const BUBBLE_DURATION_MS = 4000;
 const BUBBLE_WRAP_WIDTH = 110;
 
-// Room background art is a 256x144 placeholder; scaling it 2x fills the
-// GRID_COLS x GRID_ROWS canvas exactly (16*32 x 9*32 = 512x288) without
-// touching the critter sprite scale tuned above.
-const BACKGROUND_SCALE = 2;
-
-// Each visual table in the background art is a spot players can walk onto
-// to start a game. Cell coords were derived from the background image's
-// table blob centroids, scaled by BACKGROUND_SCALE — there are exactly 3
-// tables drawn, one per game.
+// "The Parlor" room: a wallpapered back wall (rows 0-2) with a fireplace,
+// and a floor (rows 3-10) centered on a rug. Each entry is a piece of
+// furniture players walk onto to start that game — positions chosen to
+// mirror the approved mockup's symmetric layout (card table centered on
+// the rug, desk and side table flanking it in the front corners).
 const GAME_TABLES = [
-  { id: "table-a", cell: { x: 8, y: 2 }, gameType: "word" },
-  { id: "table-b", cell: { x: 3, y: 4 }, gameType: "connect_four" },
-  { id: "table-c", cell: { x: 10, y: 4 }, gameType: "connections" },
+  { id: "writing-desk", cell: { x: 2, y: 8 }, gameType: "word" },
+  { id: "card-table", cell: { x: 6, y: 6 }, gameType: "connect_four" },
+  { id: "side-table", cell: { x: 9, y: 8 }, gameType: "connections" },
 ];
 
 function findTableAt(x, y) {
@@ -775,21 +773,307 @@ function onConnectFourOpponentLeft(payload) {
   c4StatusEl.textContent = "Your opponent disconnected — you win!";
 }
 
-// Temp placeholder room background (see IMPLEMENTATION_PLAN.md's
-// "no sprite/background art style decided yet" note) — its 3 painted
-// tables are the walkable GAME_TABLES cells above.
-function drawBackground(scene) {
-  scene.add.image(0, 0, "room-bg").setOrigin(0, 0).setScale(BACKGROUND_SCALE);
+const ROOM_WIDTH = GRID_COLS * GRID_SIZE;
+const ROOM_HEIGHT = GRID_ROWS * GRID_SIZE;
+const WALL_HEIGHT = 3 * GRID_SIZE;
+// Rows above this are the wallpapered wall — not floor, so not walkable.
+const FLOOR_TOP_ROW = WALL_HEIGHT / GRID_SIZE;
+
+// "The Parlor" — code-drawn (no external art) so it stays in sync with
+// GAME_TABLES without needing a separate image asset to keep in step.
+// Static decor (wall, rug, fireplace) draws once; the 3 GAME_TABLES spots
+// get their own glow ring + bobbing badge + hover highlight below.
+function drawRoomDecor(scene) {
+  const g = scene.add.graphics();
+
+  g.fillStyle(0x9c6a42, 1);
+  g.fillRect(0, 0, ROOM_WIDTH, ROOM_HEIGHT);
+  for (let x = 42; x < ROOM_WIDTH; x += 44) {
+    g.fillStyle(0x8a5a36, 1);
+    g.fillRect(x, WALL_HEIGHT, 2, ROOM_HEIGHT - WALL_HEIGHT);
+  }
+
+  g.fillStyle(0xe9d6c2, 1);
+  g.fillRect(0, 0, ROOM_WIDTH, WALL_HEIGHT - 16);
+  g.fillStyle(0x9c5a52, 0.14);
+  for (let x = 4; x < ROOM_WIDTH; x += 16) {
+    for (let y = 4; y < WALL_HEIGHT - 22; y += 16) {
+      g.fillRect(x, y, 2, 2);
+    }
+  }
+  g.fillStyle(0x6a4530, 1);
+  g.fillRect(0, WALL_HEIGHT - 16, ROOM_WIDTH, 12);
+  g.fillStyle(0x4a3020, 1);
+  g.fillRect(0, WALL_HEIGHT - 4, ROOM_WIDTH, 4);
+
+  drawSconce(scene, 40, 34);
+  drawSconce(scene, ROOM_WIDTH - 40, 34);
+  drawFrame(scene, 110, 28, 0x7fa8e0);
+  drawFrame(scene, ROOM_WIDTH - 110, 28, 0x6fbf6f);
+  drawFireplace(scene, ROOM_WIDTH / 2, WALL_HEIGHT - 16);
+
+  const rugW = 232;
+  const rugH = 172;
+  const rugX = ROOM_WIDTH / 2 - rugW / 2;
+  const rugY = WALL_HEIGHT + 14;
+  g.fillStyle(0xe8c9a0, 1);
+  g.fillRoundedRect(rugX, rugY, rugW, rugH, 8);
+  g.fillStyle(0xc96a5a, 1);
+  g.fillRoundedRect(rugX + 7, rugY + 7, rugW - 14, rugH - 14, 6);
+  g.lineStyle(3, 0xe8c9a0, 0.55);
+  g.strokeRoundedRect(rugX + 20, rugY + 20, rugW - 40, rugH - 40, 4);
 }
 
-function drawGrid(scene) {
+function drawSconce(scene, x, y) {
   const g = scene.add.graphics();
-  g.lineStyle(1, 0xffffff, 0.15);
-  for (let x = 0; x <= GRID_COLS; x++) {
-    g.lineBetween(x * GRID_SIZE, 0, x * GRID_SIZE, GRID_ROWS * GRID_SIZE);
+  g.fillStyle(0xffe9b0, 0.35);
+  g.fillCircle(x, y - 9, 8);
+  g.fillStyle(0xd8c2a0, 1);
+  g.fillRoundedRect(x - 4, y, 8, 16, 2);
+  g.lineStyle(1.5, 0x4a3426, 1);
+  g.strokeRoundedRect(x - 4, y, 8, 16, 2);
+}
+
+function drawFrame(scene, x, y, artColor) {
+  const g = scene.add.graphics();
+  g.fillStyle(0xb58a5c, 1);
+  g.fillRect(x - 15, y, 30, 40);
+  g.lineStyle(3, 0xcaa15c, 1);
+  g.strokeRect(x - 15, y, 30, 40);
+  g.fillStyle(artColor, 1);
+  g.fillRect(x - 9, y + 6, 18, 28);
+}
+
+function drawFireplace(scene, x, bottomY) {
+  const width = 80;
+  const height = 54;
+  const g = scene.add.graphics();
+  g.fillStyle(0x7a5638, 1);
+  g.fillRoundedRect(x - width / 2 - 6, bottomY - height - 12, width + 12, 12, 2);
+  g.fillStyle(0xd8e4e8, 1);
+  g.fillRoundedRect(x - 25, bottomY - height - 34, 50, 24, 12);
+  g.lineStyle(3, 0xcaa15c, 1);
+  g.strokeRoundedRect(x - 25, bottomY - height - 34, 50, 24, 12);
+  g.fillStyle(0x8a8580, 1);
+  g.fillRect(x - width / 2, bottomY - height, width, height);
+  g.lineStyle(3, 0x4a3426, 1);
+  g.strokeRect(x - width / 2, bottomY - height, width, height);
+  g.fillStyle(0x2a1c14, 1);
+  g.fillRoundedRect(x - 24, bottomY - 44, 48, 44, [4, 4, 2, 2]);
+
+  const glow = scene.add.graphics();
+  glow.fillStyle(0xe8a33d, 0.16);
+  glow.fillCircle(x, bottomY - 20, 60);
+
+  const flame = scene.add.container(x, bottomY - 12);
+  const flameG = scene.add.graphics();
+  flameG.fillStyle(0xd9524f, 1);
+  flameG.fillEllipse(0, 0, 16, 24);
+  flameG.fillStyle(0xe8a33d, 1);
+  flameG.fillEllipse(0, 2, 11, 17);
+  flameG.fillStyle(0xffce6a, 1);
+  flameG.fillEllipse(0, 4, 6, 10);
+  flame.add(flameG);
+  scene.tweens.add({
+    targets: flame,
+    scaleX: 0.88,
+    scaleY: 1.1,
+    duration: 700,
+    yoyo: true,
+    repeat: -1,
+    ease: "Sine.easeInOut",
+  });
+}
+
+// Small icon drawn inside a spot's floating badge, one per game type —
+// lets the badge communicate *what* you'll get, not just that it's
+// clickable.
+function addBadgeIcon(scene, container, gameType) {
+  if (gameType === "word") {
+    const label = scene.add.text(0, 0, "W", {
+      fontFamily: "Fredoka, sans-serif",
+      fontSize: "14px",
+      fontStyle: "700",
+      color: "#2a2a2a",
+    });
+    label.setOrigin(0.5);
+    container.add(label);
+    return;
   }
-  for (let y = 0; y <= GRID_ROWS; y++) {
-    g.lineBetween(0, y * GRID_SIZE, GRID_COLS * GRID_SIZE, y * GRID_SIZE);
+  if (gameType === "connect_four") {
+    const g = scene.add.graphics();
+    g.fillStyle(0xd9524f, 1);
+    g.fillCircle(-4, 1, 5.5);
+    g.fillStyle(0xe8c93d, 1);
+    g.fillCircle(4, 1, 5.5);
+    container.add(g);
+    return;
+  }
+  const g = scene.add.graphics();
+  const colors = [0xe8d84a, 0x6fbf6f, 0x7fa8e0, 0xb98fd6];
+  const offsets = [
+    [-4, -4],
+    [3, -4],
+    [-4, 3],
+    [3, 3],
+  ];
+  colors.forEach((color, i) => {
+    g.fillStyle(color, 1);
+    g.fillRect(offsets[i][0], offsets[i][1], 6, 6);
+  });
+  container.add(g);
+}
+
+// Draws the furniture for one GAME_TABLES entry, centered on its cell —
+// deriving position straight from the same data findTableAt() uses, so
+// the art can never drift out of sync with what's actually walkable.
+// Draws relative to (0,0) — the caller wraps the result in a container
+// positioned at the table's cell center, so the whole piece scales
+// around its own middle on hover instead of the world origin.
+function drawTableFurniture(scene, table) {
+  const g = scene.add.graphics();
+  const pieces = [g];
+
+  if (table.gameType === "word") {
+    g.fillStyle(0xa5693e, 1);
+    g.fillRoundedRect(-11, 18, 22, 20, 3);
+    g.lineStyle(2, 0x4a3426, 1);
+    g.strokeRoundedRect(-11, 18, 22, 20, 3);
+    g.fillStyle(0xe8c93d, 1);
+    g.fillRoundedRect(26, -26, 12, 18, [2, 2, 6, 6]);
+    g.lineStyle(1.5, 0x4a3426, 1);
+    g.strokeRoundedRect(26, -26, 12, 18, [2, 2, 6, 6]);
+    g.fillStyle(0x7a5638, 1);
+    g.fillRoundedRect(-48, -22, 96, 44, 4);
+    g.lineStyle(2, 0x4a3426, 1);
+    g.strokeRoundedRect(-48, -22, 96, 44, 4);
+    ["C", "A", "T"].forEach((letter, i) => {
+      const tx = -21 + i * 19;
+      g.fillStyle(0xfffaf3, 1);
+      g.fillRoundedRect(tx, -7, 14, 14, 2);
+      g.lineStyle(1.5, 0x2a2a2a, 1);
+      g.strokeRoundedRect(tx, -7, 14, 14, 2);
+      const label = scene.add
+        .text(tx + 7, 0, letter, { fontFamily: "Fredoka, sans-serif", fontSize: "9px", fontStyle: "700", color: "#2a2a2a" })
+        .setOrigin(0.5);
+      pieces.push(label);
+    });
+  } else if (table.gameType === "connect_four") {
+    ["left", "right"].forEach((side) => {
+      const cx = side === "left" ? -70 : 70;
+      g.fillStyle(0xa5693e, 1);
+      g.fillRoundedRect(cx - 10, -6, 20, 26, 4);
+      g.lineStyle(2, 0x4a3426, 1);
+      g.strokeRoundedRect(cx - 10, -6, 20, 26, 4);
+    });
+    g.fillStyle(0x7a5638, 1);
+    g.fillCircle(0, 0, 54);
+    g.lineStyle(3, 0x4a3426, 1);
+    g.strokeCircle(0, 0, 54);
+    g.fillStyle(0x2b5aa8, 1);
+    g.fillCircle(0, 0, 41);
+    const chipColors = [0x14141c, 0xd9524f, 0xe8c93d];
+    for (let row = -1; row <= 1; row++) {
+      for (let col = -1; col <= 1; col++) {
+        g.fillStyle(chipColors[Math.abs(row * 3 + col) % chipColors.length], 1);
+        g.fillCircle(col * 12, row * 12, 5.5);
+      }
+    }
+  } else {
+    g.fillStyle(0xa5693e, 1);
+    g.fillCircle(0, 0, 42);
+    g.lineStyle(3, 0x4a3426, 1);
+    g.strokeCircle(0, 0, 42);
+    const cardColors = [0xe8d84a, 0x6fbf6f, 0x7fa8e0, 0xb98fd6];
+    const cardAngles = [-18, -6, 6, 18];
+    cardColors.forEach((color, i) => {
+      const card = scene.add.graphics();
+      card.fillStyle(color, 1);
+      card.fillRoundedRect(-9, -14, 18, 24, 3);
+      card.lineStyle(2, 0x4a3426, 1);
+      card.strokeRoundedRect(-9, -14, 18, 24, 3);
+      const cardContainer = scene.add.container((i - 1.5) * 11, 0, [card]);
+      cardContainer.setAngle(cardAngles[i]);
+      pieces.push(cardContainer);
+    });
+  }
+
+  return pieces;
+}
+
+// A tween that pulses/bobs forever — captured behind a start function so
+// hover can kill it and restart it later, instead of layering a second
+// tween on the same properties (which fights the idle one and reads as
+// a flash instead of a held highlight — the same bug already fixed once
+// this session for player movement, in onPlayerMoved).
+function startIdlePulse(scene, target, props) {
+  return scene.tweens.add({ targets: target, ...props, yoyo: true, repeat: -1, ease: "Sine.easeInOut" });
+}
+
+function createInteractiveSpot(scene, table) {
+  const center = cellCenter(table.cell.x, table.cell.y);
+  const furniturePieces = drawTableFurniture(scene, table);
+  const furniture = scene.add.container(center.x, center.y, furniturePieces);
+
+  // Always-visible pulsing "walk here" glow — not hover-gated, so it
+  // reads as interactive on touch devices too.
+  const glow = scene.add.graphics();
+  glow.fillStyle(0xe8a33d, 0.32);
+  glow.fillEllipse(0, 0, 92, 30);
+  glow.fillStyle(0xe8a33d, 0.5);
+  glow.fillEllipse(0, 0, 56, 18);
+  const glowContainer = scene.add.container(center.x, center.y + 32, [glow]);
+  let glowTween = startIdlePulse(scene, glowContainer, { scaleX: 1.12, scaleY: 1.12, alpha: { from: 0.75, to: 1 }, duration: 1300 });
+
+  // Floating badge — bobs continuously (works without hover); brightens
+  // further on hover as a desktop-only bonus, layered on top of that.
+  const badgeY = center.y - 46;
+  const badgeBg = scene.add.graphics();
+  badgeBg.fillStyle(0xfffaf3, 1);
+  badgeBg.fillRoundedRect(-15, -15, 30, 30, 9);
+  badgeBg.lineStyle(2, 0x4a3426, 1);
+  badgeBg.strokeRoundedRect(-15, -15, 30, 30, 9);
+  const badge = scene.add.container(center.x, badgeY, [badgeBg]);
+  addBadgeIcon(scene, badge, table.gameType);
+  let badgeTween = startIdlePulse(scene, badge, { y: badgeY - 6, duration: 1100 });
+
+  const hoverZone = scene.add.zone(center.x, center.y, 130, 130).setOrigin(0.5).setInteractive();
+  hoverZone.on("pointerover", () => {
+    scene.tweens.killTweensOf([glowContainer, badge, furniture]);
+    scene.tweens.add({ targets: glowContainer, scaleX: 1.3, scaleY: 1.3, alpha: 1, duration: 120 });
+    scene.tweens.add({ targets: badge, y: badgeY, scaleX: 1.15, scaleY: 1.15, duration: 120 });
+    scene.tweens.add({ targets: furniture, scaleX: 1.08, scaleY: 1.08, duration: 120 });
+  });
+  hoverZone.on("pointerout", () => {
+    scene.tweens.killTweensOf([glowContainer, badge, furniture]);
+    scene.tweens.add({ targets: furniture, scaleX: 1, scaleY: 1, duration: 150 });
+    scene.tweens.add({
+      targets: glowContainer,
+      scaleX: 1,
+      scaleY: 1,
+      alpha: 0.75,
+      duration: 150,
+      onComplete: () => {
+        glowTween = startIdlePulse(scene, glowContainer, { scaleX: 1.12, scaleY: 1.12, alpha: { from: 0.75, to: 1 }, duration: 1300 });
+      },
+    });
+    scene.tweens.add({
+      targets: badge,
+      y: badgeY,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 150,
+      onComplete: () => {
+        badgeTween = startIdlePulse(scene, badge, { y: badgeY - 6, duration: 1100 });
+      },
+    });
+  });
+}
+
+function drawRoom(scene) {
+  drawRoomDecor(scene);
+  for (const table of GAME_TABLES) {
+    createInteractiveSpot(scene, table);
   }
 }
 
@@ -846,14 +1130,12 @@ new Phaser.Game({
   pixelArt: true, // crisp nearest-neighbor scaling for the pixel-art sprites
   scene: {
     preload: function () {
-      this.load.image("room-bg", "assets/backgrounds/room-temp.png");
       preloadCritterTextures(this);
     },
     create: function () {
       scene = this;
       registerCritterAnimations(this);
-      drawBackground(this);
-      drawGrid(this);
+      drawRoom(this);
       this.input.on("pointerdown", (pointer) => {
         if (!roomCode) return;
         // pointer.x/y go through Phaser's scale-manager transform, which
@@ -883,8 +1165,11 @@ new Phaser.Game({
         const offsetX = (point.clientX - rect.left) * scaleX;
         const offsetY = (point.clientY - rect.top) * scaleY;
         const targetX = Math.floor(offsetX / GRID_SIZE);
-        const targetY = Math.floor(offsetY / GRID_SIZE);
-        if (!Number.isFinite(targetX) || !Number.isFinite(targetY)) return;
+        const rawTargetY = Math.floor(offsetY / GRID_SIZE);
+        if (!Number.isFinite(targetX) || !Number.isFinite(rawTargetY)) return;
+        // The wall (top rows) isn't floor — clamp taps there to the
+        // nearest walkable row instead of letting cats stand on it.
+        const targetY = Math.max(rawTargetY, FLOOR_TOP_ROW);
         const table = findTableAt(targetX, targetY);
         pendingGameTable = table;
         send("MOVE", { target_x: targetX, target_y: targetY, facing_direction: "NORTH" });
